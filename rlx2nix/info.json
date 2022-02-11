@@ -1,0 +1,11 @@
+{
+    "NAME": "rlx2nix",
+    "VERSION": "0.1",
+    "STATUS": "dev",
+    "RELEASE": "0.1_dev",
+    "AUTHOR": "Jan Grewe",
+    "COPYRIGHT": "2022, Neuroethology lab University of Tuebingen, Jan Grewe",
+    "CONTACT": "jan.grewe@g-node.org",
+    "BRIEF": "Converter for relacs folder base datasets to NIX files (http://g-node.github.io/nix/)",
+    "HOMEPAGE": "https://github.com/relacs"
+}
