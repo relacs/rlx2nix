@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# Copyright © 2022, Neuroethology Lab Uni Tuebingen
+#
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted under the terms of the BSD License. See
+# LICENSE file in the root of the Project.
+
 import os
 import glob
 import logging
@@ -42,15 +51,23 @@ class Converter(object):
             logging.debug(f"\tunzip: {tracename}")
             subprocess.check_call(["gunzip", tracename])
 
-    def find_traces(self):
+    def find_raw_traces(self):
         logging.debug(f"Checking for raw traces!")
-        raw_traces = sorted(glob.glob(os.path.join(self._folder, "trace-*.raw*")))
-        for rt in raw_traces:
-            if rt.endswith(".gz") and rt.split(".gz")[0] not in raw_traces:
+        traces = sorted(glob.glob(os.path.join(self._folder, "trace-*.raw*")))
+        for rt in traces:
+            if rt.endswith(".gz") and rt.split(".gz")[0] not in traces:
                 self.unzip(os.path.split(rt)[-1])
         
-        raw_traces = sorted(glob.glob(os.path.join(self._folder, "trace-*.raw")))
-        return raw_traces
+        traces = sorted(glob.glob(os.path.join(self._folder, "trace-*.raw")))
+        logging.debug(f"Found {len(traces)} raw traces. {[os.path.split(t)[-1] for t in traces]}")
+
+        return traces
+
+    def find_event_traces(self):
+        logging.debug("Discovering event traces!")
+        traces = sorted(glob.glob(os.path.join(self._folder, "*-events.dat")))
+        logging.debug(f"Found {len(traces)} event traces. {[os.path.split(t)[-1] for t in traces]}")
+        return traces
 
     def find_info(self):
         info = None
@@ -74,8 +91,8 @@ class Converter(object):
 
     def check_folder(self):
         logging.debug("Checking folder structure: ...")
-        raw_traces = self.find_traces()
-        logging.debug(f"Found {len(raw_traces)} raw traces.")
+        raw_traces = self.find_raw_traces()
+        event_traces = self.find_event_traces()
         info = self.find_info()
         logging.debug("Found info file!")
         stim_info = self.find_stimulus_info()
