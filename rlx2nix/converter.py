@@ -120,7 +120,6 @@ class Converter(object):
 
         filename = os.path.join(self._folder, "info.dat")
         oldstyle = looks_like_oldstyle(filename)
-        print(f"{filename} is oldstyle {oldstyle}")
         info = {}
         logging.info("Reading info file....")
         try:
@@ -243,7 +242,6 @@ class Converter(object):
                     sec = parent_section.create_section(k, k.lower())
                     self.convert_metadata(metadata[k], nixfile, sec)
                 else:  # is property
-                    print(parent_section.name, k)
                     value, unit = self.parse_value(metadata[k])
                     if value is None:
                         continue
@@ -277,11 +275,28 @@ class Converter(object):
             si = float(channel_config[rt._trace_no]["sampling interval"][:-2]) / 1000.
             da.append_sampled_dimension(si, unit="s")
 
-    def convert_event_traces(self, nix_file):
+    def convert_event_traces(self, block):
+
+        def read_event_data(filename):
+            logging.info(f"Reading event times from file {filename}...")
+            times = []
+            with open(filename, 'r') as f:
+                for l in f:
+                    if len(l.strip()) == 0 or "#" in l:
+                        continue
+                    times.append(float(l.strip().split()[0].strip()))
+
+            return np.array(times)
+
         logging.info("Converting event traces...")
         for et in self._event_traces:
             logging.info(f"... trace {et.name}")
-            # FIXME
+            event_times = read_event_data(et._filename)
+            da = block.create_data_array(et.name, "relacs.data.events", data=event_times)
+            da.unit = "s"
+            da.append_range_dimension_using_self()
+            da.definition = f"Events detected in {et.inputtrace}"
+
 
     def convert(self):
         logging.info("Converting dataset {self._folder} to nix file {self._output}!")
@@ -289,9 +304,9 @@ class Converter(object):
         logging.debug("Got channel configuration!")
         channel_config = self.read_channel_config()
         nf = self.open_nix_file()
+        self.convert_raw_traces(nf, channel_config)
+        self.convert_event_traces(nf.blocks[0])
         embed()
         nf.close()
         exit()
-        self.convert_raw_traces(nf, channel_config)
-        self.convert_event_traces(nf)
         nf.close()
