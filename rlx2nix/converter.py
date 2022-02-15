@@ -6,15 +6,26 @@
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted under the terms of the BSD License. See
 # LICENSE file in the root of the Project.
-
+import re
 import os
 import glob
 import logging
-import nixio as nix
 import subprocess
+import numpy as np
+import nixio as nix
+
+from .config import ConfigFile
+from .traces import EventTrace, RawTrace
 
 from IPython import embed
 
+units = ["mV", "sec", "min", "uS/cm", "C", "°C", "Hz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
+unit_pattern = {}
+for unit in units:
+    unit_pattern[unit] = re.compile(f"{unit}$", re.IGNORECASE|re.UNICODE)
+only_number = re.compile("^([+-]?\\d+\\.?\\d+)$")
+integer_number = re.compile("^[+-]?\\d+$")
+number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d+)\\s?\\w+(/\\w+)?$")
 
 class Converter(object):
 
@@ -190,5 +201,97 @@ class Converter(object):
         logging.debug("Found stimulus information!")
         return True
 
+    def parse_value(self, value_str):
+        value = None
+        unit = None
+        # check number
+        if only_number.search(value_str) is not None:
+            if integer_number.match(value_str) is not None:
+                value = int(value_str)
+            else:
+                value = float(value_str)
+        elif number_and_unit.search(value_str):
+            for u in unit_pattern.keys():
+                if unit_pattern[u].search(value_str) is not None:
+                    unit = u
+                    value_str = value_str.split(u)[0]
+                    if integer_number.match(value_str):
+                        value = int(value_str)
+                    else:
+                        value = float(value_str)
+                    break
+        else:
+            value = value_str
+        return value, unit
+
+    def convert_metadata(self, metadata, nixfile, parent_section=None):
+        def split_list(value_str):
+            results = None
+            if len(value_str) == 0:
+                return " "
+            if "|" in value_str:
+                results = list(map(str.strip, value_str.split("|")))
+            elif value_str[0] == "[" and "]" in value_str:
+                results = list(map(str.strip, value_str[1:value_str.index("]")].split(', ')))
+            else: 
+                results = value_str
+            return results
+
+        if parent_section is not None:
+            for k in metadata.keys():
+                if isinstance(metadata[k], dict):
+                    sec = parent_section.create_section(k, k.lower())
+                    self.convert_metadata(metadata[k], nixfile, sec)
+                else:  # is property
+                    print(parent_section.name, k)
+                    value, unit = self.parse_value(metadata[k])
+                    if value is None:
+                        continue
+                    if isinstance(value, str):
+                        value = split_list(value)
+                    p = parent_section.create_property(k, value)
+                    if unit is not None:
+                        p.unit = unit
+
+    def open_nix_file(self):
+        info = self.read_info_file()
+        nf = nix.File.open(self._output, nix.FileMode.Overwrite)
+        dataset_name = os.path.split(self._output)[-1].strip(".nix")
+
+        block = nf.create_block(dataset_name, "relacs.recording")
+        sec = nf.create_section(dataset_name, "relacs.recording")
+        block.metadata = sec
+        sec.create_property("relacs-nix version", 1.1)
+        self.convert_metadata(info, nf, sec)
+
+        return nf
+
+    def convert_raw_traces(self, nix_file, channel_config):
+        logging.info("Converting raw traces, this may take a little while...")
+        block = nix_file.blocks[0]
+        for rt in self._raw_traces:
+            logging.info(f"... trace {rt._trace_no}: {rt.name}")
+            data = np.fromfile(os.path.join(self._folder, rt.filename), dtype=np.float32)
+            da = block.create_data_array(rt.name, "relacs.data.sampled", dtype=nix.DataType.Float, data=data)
+            da.unit = channel_config[rt._trace_no]["unit"]
+            si = float(channel_config[rt._trace_no]["sampling interval"][:-2]) / 1000.
+            da.append_sampled_dimension(si, unit="s")
+
+    def convert_event_traces(self, nix_file):
+        logging.info("Converting event traces...")
+        for et in self._event_traces:
+            logging.info(f"... trace {et.name}")
+            # FIXME
+
     def convert(self):
-        print("Convert!", self._folder)
+        logging.info("Converting dataset {self._folder} to nix file {self._output}!")
+        channel_config = self.read_channel_config()
+        logging.debug("Got channel configuration!")
+        channel_config = self.read_channel_config()
+        nf = self.open_nix_file()
+        embed()
+        nf.close()
+        exit()
+        self.convert_raw_traces(nf, channel_config)
+        self.convert_event_traces(nf)
+        nf.close()
