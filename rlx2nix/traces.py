@@ -7,15 +7,43 @@
 # modification, are permitted under the terms of the BSD License. See
 # LICENSE file in the root of the Project.
 import os
+from .config import ConfigFile
+
+from IPython import embed
 
 
 class EventTrace(object):
 
-    def __init__(self, dataset_folder) -> None:
-        if not os.path.exists(dataset_folder):
-            raise FileNotFoundError(f"Dataset does not exist at location {dataset_folder}!")
-        self._name
-        self._inputtrace
-        self._settings
-        self._folder = dataset_folder
+    def __init__(self, filename, configuration) -> None:
+        self._filename = filename
+        self._name = os.path.split(self._filename)[-1].split("-events.dat")[0]
+        self._inputtrace = None
+        self._settings = None
+
+        self._find_configuration(configuration)
+
+    def _find_configuration(self, configuration):
+        s = configuration._root.find_related("FilterDetectors")
+        for sub in s:
+            if self._name in sub.properties["name"][0].lower():
+                self._inputtrace = sub.properties["inputtrace"][0]
+                self._settings = sub
+
+    @property
+    def inputtrace(self):
+        return self._inputtrace
+    
+    @property
+    def name(self):
+        return self._name
+    
+    @property
+    def settings(self):
+        return self._settings
+
+    def __str__(self) -> str:
+        s = f"Event trace {self.name}, mapped to input trace {self.inputtrace}"
+        return s
+
+
 
