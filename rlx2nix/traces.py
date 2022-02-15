@@ -46,4 +46,37 @@ class EventTrace(object):
         return s
 
 
+class RawTrace(object):
 
+    def __init__(self, filename, configuration):
+        self._filename = os.path.split(filename)[-1]
+        self._name = None
+        self._settings = None
+        self._trace_no = int(self.filename.split("-")[-1].split(".raw")[0])
+
+        self._find_configuration(configuration)
+
+    def _find_configuration(self, configuration):
+        sec = configuration.find_section("input data") 
+        self._name = sec.properties["inputtraceid"].values[self._trace_no -1]
+        self._scale = float(sec.properties["inputtracescale"].values[self._trace_no -1])
+
+    @property
+    def inputtrace(self):
+        return self._inputtrace
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def filename(self):
+        return self._filename
+
+    @property
+    def settings(self):
+        return self._settings
+
+    def __str__(self) -> str:
+        s = f"Raw trace {self.filename}, mapped to signal tace number {self._trace_no}: {self.name}"
+        return s
