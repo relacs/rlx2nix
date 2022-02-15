@@ -53,9 +53,9 @@ def main():
         if not os.path.isdir(f):
             logging.warning(f"Skipping! {f} is no folder")
             continue
-        folder_name = os.path.split(f)[-1]
+        dataset = os.path.split(f.rstrip(os.sep))[-1]
         if args.output is None:
-            output_filename = os.path.join(f, folder_name + ".nix")
+            output_filename = os.path.join(f, dataset + ".nix")
         elif is_prefix:
             output_filename = os.path.join(f, args.output + "_" + os.path.split(f)[-1] + ".nix")
         else:
