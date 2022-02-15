@@ -98,6 +98,49 @@ class Converter(object):
             raise ValueError(f"No info file found in {self._folder}!")
         return True
 
+    def read_info_file(self):
+        def looks_like_oldstyle(filename):
+            with open(filename, 'r') as f:
+                for l in f:
+                    if "# Recording" in l:
+                        oldtyle = not l.strip().endswith(":")
+                        break
+            return oldtyle
+
+        filename = os.path.join(self._folder, "info.dat")
+        oldstyle = looks_like_oldstyle(filename)
+        print(f"{filename} is oldstyle {oldstyle}")
+        info = {}
+        logging.info("Reading info file....")
+        try:
+            with open(filename, 'r') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            logging.debug("Replacing experimenter...")
+            command = r"sudo sed -i '/Experimenter/c\#       Experimenter: Anna Stoeckl' %s" % filename
+            subprocess.check_call(command, shell=True)
+            with open(filename, 'r') as f:
+                lines = f.readlines()
+        for l in lines:
+            if not l.startswith("#"):
+                continue
+            l = l.strip("#").strip()
+            if len(l) == 0:
+                continue
+            if oldstyle:
+                if not ":" in l:   # subsection
+                    sec = {}
+                    info[l[:-1] if l.endswith(":") else l] = sec
+                else:
+                    parts = l.split(':')
+                    sec[parts[0].strip()] = parts[1].strip('"').strip() if len(parts) > 1 else ""
+            else:
+                if l.endswith(":"):  # subsection
+                    sec = {}
+                    info[l[:-1] if l.endswith(":") else l] = sec
+                else:
+                    parts = l.split(': ')
+                    sec[parts[0].strip()] = parts[1].strip('"').strip() if len(parts) > 1 else ""
         return info
 
     def read_channel_config(self):
