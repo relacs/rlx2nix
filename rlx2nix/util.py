@@ -1,13 +1,21 @@
 import os
 import re
+import odml
 import logging
 import numpy as np
 
 from IPython import embed
 
-only_number = re.compile("^([+-]?\\d+\\.?\\d+)$")
+only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
 integer_number = re.compile("^[+-]?\\d+$")
+number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
 repro = re.compile(".+RePro.*:{1}.+", re.IGNORECASE)
+
+units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
+unit_pattern = {}
+for unit in units:
+    unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
+
 
 class Column(object):
 
@@ -177,11 +185,71 @@ class Table(object):
         return s
 
 
-class StimuliDat(object):
+class Metadata(object):
+    def __init__(self, name, lines, start, end) -> None:
+        self.start = start
+        self.end = end
+        self._root = odml.Section(name)
+        self._parse(lines)
 
+    def _parse(self, lines):
+
+        def parse_value(value_str):
+            value = None
+            unit = None
+            # check number
+            if only_number.search(value_str) is not None:
+                print(value_str, "is number!")
+                if integer_number.match(value_str) is not None:
+                    value = int(value_str)
+                else:
+                    value = float(value_str)
+            elif number_and_unit.search(value_str):
+                print(value_str, "is number and unit")
+                for u in unit_pattern.keys():
+                    print(f"\tchecking unit {u}")
+                    if unit_pattern[u].search(value_str) is not None:
+                        print(f"matching {u}!")
+                        unit = u
+                        value_str = value_str.split(u)[0]
+                        if integer_number.match(value_str):
+                            value = int(value_str)
+                        else:
+                            value = float(value_str)
+                        print(f"\t{value}, {unit}")
+                        break
+            else:
+                print(value_str, "is string!")
+                value = value_str
+            return value, unit
+
+        def looks_like_property(line):
+            result = ":" in line and len(line.strip().split(": ")) > 1 and line.strip()[0] != "*"
+            return result
+
+        def looks_like_section(line):
+            return len(line) > 0 and not looks_like_property(line)
+
+        section = self._root
+        for l in lines[self.start:self.end]:
+            if not l.startswith("#"):
+                continue
+            if looks_like_section(l):
+                name = l.strip().lstrip("# ").split(":")[0]
+                section = self._root.create_section(name)
+            elif looks_like_property(l):
+                parts = l.lstrip("#").strip().split(": ")
+                value, unit = parse_value(parts[1].strip())
+                p = section.create_property(parts[0].strip(), value)
+                p.unit = unit
+
+
+class StimuliDat(object):
+    
     def __init__(self, filename, loglevel="ERROR") -> None:
         self._filename = filename
         self._repro_runs = []
+        self._general_metadata = []
         logging.basicConfig(level=logging._nameToLevel[loglevel], force=True)
         if not os.path.exists(self._filename):
             logging.error(f"Stimuli.dat file {self._filename} does not exist!")
@@ -189,19 +257,33 @@ class StimuliDat(object):
 
         self.scan_file()
 
-    def scan_file(self):
-        end_index = 0
-        tables = []
+    def find_general_metadata(self, lines, start_index=0):
+        index = start_index
+        line = lines[index].strip()
+        while not line.startswith("#"):
+            start_index = index
+            index += 1
+            line = lines[index].strip()
 
+        while line.startswith("#") and not line.startswith("#Key"):
+            index += 1
+            line = lines[index].strip()
+
+        return start_index, index
+
+    def scan_file(self):
         f = open(self._filename)
         lines = f.readlines()
         f.close()
 
-        while end_index < len(lines):
-            table, end_index = table_parser(lines, start_index=end_index)
-            tables.append(table)
+        start, end = self.find_general_metadata(lines)
+        self._general_metadata = Metadata("General settings", lines, start, end)
+        embed()
+        # while end_index < len(lines):
+        #     table, end_index = table_parser(lines, start_index=end_index)
+        #     tables.append(table)
 
-        
+
 def table_parser(lines, start_index=0):
     def find_header(lines, start_index=0):
         """
