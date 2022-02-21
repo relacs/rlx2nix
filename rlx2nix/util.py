@@ -1,4 +1,4 @@
-import enum
+import os
 import re
 import logging
 import numpy as np
@@ -177,6 +177,31 @@ class Table(object):
         return s
 
 
+class StimuliDat(object):
+
+    def __init__(self, filename, loglevel="ERROR") -> None:
+        self._filename = filename
+        self._repro_runs = []
+        logging.basicConfig(level=logging._nameToLevel[loglevel], force=True)
+        if not os.path.exists(self._filename):
+            logging.error(f"Stimuli.dat file {self._filename} does not exist!")
+            return
+
+        self.scan_file()
+
+    def scan_file(self):
+        end_index = 0
+        tables = []
+
+        f = open(self._filename)
+        lines = f.readlines()
+        f.close()
+
+        while end_index < len(lines):
+            table, end_index = table_parser(lines, start_index=end_index)
+            tables.append(table)
+
+        
 def table_parser(lines, start_index=0):
     def find_header(lines, start_index=0):
         """
@@ -322,16 +347,17 @@ def table_parser(lines, start_index=0):
 
 
 if __name__ == "__main__":
+    stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
     from IPython import embed
-    #f = open("../2012-03-23-ae-invivo-1/stimuli.dat")
-    f = open("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
-    lines = f.readlines()
-    f.close()
-    logging.basicConfig(level=logging._nameToLevel["INFO"], force=True)
-    end_index = 0
-    count = 0
-    tables = []
-    while end_index < len(lines) and count < 100:
-        table, end_index = table_parser(lines, start_index=end_index)
-        tables.append(table)
-        count += 1
+    embed()
+    # f = open("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
+    # lines = f.readlines()
+    # f.close()
+    # logging.basicConfig(level=logging._nameToLevel["INFO"], force=True)
+    # end_index = 0
+    # count = 0
+    # tables = []
+    # while end_index < len(lines) and count < 100:
+    #     table, end_index = table_parser(lines, start_index=end_index)
+    #     tables.append(table)
+    #     count += 1
