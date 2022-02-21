@@ -137,9 +137,11 @@ class ColumnGroup(object):
 
 class Table(object):
 
-    def __init__(self, name:str) -> None:
+    def __init__(self, name:str, lines, start_index) -> None:
         self._name = name
         self._column_groups = []
+        self._start_index = start_index
+        self._end_index = self.table_parser(lines, start_index)
 
     @property
     def name(self):
@@ -184,6 +186,143 @@ class Table(object):
         s = f"Table {self.name} with {len(self.column_groups)} column groups and {self.column_count} total columns"
         return s
 
+    def table_parser(self, lines, start_index=0):
+        def find_header(lines, start_index=0):
+            """
+            Returns
+            -------
+            int:
+                start index of the table header
+            int:
+                end index of the table header
+            str: 
+                the Repro name if found
+            """
+            start = start_index
+            end = -1
+            found_header = False
+            repro_name = None
+            for l in lines[start:]:
+                l = l.strip()
+                if repro.search(l) is not None:
+                    repro_name = l.split(":")[-1].strip()
+
+                if not l.startswith("#Key"):
+                    start += 1
+                    continue  # table key not found yet
+                else:
+                    found_header = True
+                    break
+
+            if not found_header:
+                return -1, -1, repro_name
+
+            end = start + 1
+            l = lines[end]
+            while l.startswith("#"):
+                end += 1
+                l = lines[end]
+            return start, end - 1, repro_name
+
+        def parse_columns(lines, index, start_pos, end_pos, subgroup):
+            colname_line = lines[index]
+            end_pos = end_pos if end_pos > 0 else len(colname_line) + 10
+
+            colnames = re.split(r'\s{2,}', colname_line[1:].strip())
+            colname_indices = []
+            for i, name in enumerate(colnames):
+                if i > 0:
+                    colname_indices.append(colname_line.find(name, colname_indices[-1] + 1))
+                else:
+                    colname_indices.append(colname_line.find(name))
+            coltype_line = lines[index+1]
+            coltypes = re.split(r'\s{2,}', coltype_line[1:].strip())
+            colnumber_line = lines[index+2]
+            colnumbers = re.split(r'\s{2,}', colnumber_line[1:].strip())
+            for i, (name, position) in enumerate(zip(colnames, colname_indices)):
+                if position >= start_pos and position < end_pos:
+                    logging.debug(f"subgroup {subgroup.name} ({start_pos} to {end_pos}) has column {name} @ {position}")
+                    column = Column(name, int(colnumbers[i]), coltypes[i])
+                    subgroup.add_column(column)
+
+        def parse_subgroups(lines, index, start_pos, end_pos, col_group):
+            line = lines[index]
+            end_pos = end_pos if end_pos > -1 else len(line) + 10
+            subgroup_names = re.split(r'\s{2,}', line[1:].strip())
+            subgroup_indices = []
+            for i, n in enumerate(subgroup_names):
+                n = n + " " if i < (len(subgroup_names) - 1) else n
+                name_index = line.find(n, (0 if len(subgroup_indices) == 0 else subgroup_indices[i-1]))
+                subgroup_indices.append(name_index)
+
+            for i, (name, position) in enumerate(zip(subgroup_names, subgroup_indices)):
+                if position >= start_pos and position < end_pos:
+                    logging.debug(f"column_group {col_group.name} ({start_pos} to {end_pos}) has subgroup {name} @ {position}")
+                    sub = ColumnSubgroup(name)
+                    col_group.add_subgroup(sub)
+                    end_position = -1 if i >= len(subgroup_indices)-1 else subgroup_indices[i+1]-1
+                    parse_columns(lines, index + 1, position, end_position, sub)
+
+        def parse_column_groups(lines, index, t):
+            line = lines[index]
+            col_group_names = re.split(r'\s{2,}', line[1:].strip())
+            col_group_indices = [line.find(sub) for sub in col_group_names]
+
+            for i, (start_pos, name) in enumerate(zip(col_group_indices, col_group_names)):
+                end_pos = -1 if i >= len(col_group_indices)-1 else col_group_indices[i+1]-1
+                g = ColumnGroup(name)
+                logging.debug(f"New column group: {g.name}...")
+                parse_subgroups(lines, index+1, start_pos, end_pos, g)
+                t.add_column_group(g)
+
+        def parse_header(lines, start_index, end_index):
+            assert(lines[start_index].startswith("#Key"))
+            assert(end_index - start_index == 5)
+            parse_column_groups(lines, start_index+1, self)
+
+        def read_tabledata(lines, start_index):
+            def convert_data(d, dt):
+                if dt == int:
+                    d = int(d)
+                elif dt == float:
+                    d = float(d)
+                else:
+                    d = str(d)
+                return d
+
+            def guess_column_dtype(d):
+                if integer_number.match(d) or only_number.match(d):
+                    return float
+                else:
+                    return str
+
+            columns = [self.find_column(i+1) for i in range(self.column_count)]
+            dtypes = [float for c in columns]
+            end_index = start_index
+            for line in lines[start_index:]:
+                line = line.strip()
+
+                if len(line) > 0:
+                    data = re.split(r'\s{2,}', line)
+                    for i, (c, dt) in enumerate(zip(columns, dtypes)):
+                        if end_index == start_index:
+                            dt = guess_column_dtype(data[i].strip())
+                            dtypes[i] = dt
+                        try:
+                            d = convert_data(data[i].strip(), dt)
+                        except:
+                            d = str(d)
+                        c.append_data(d)
+                else:
+                    break
+                end_index += 1
+            return end_index
+
+        start, end, _ = find_header(lines, start_index)
+        parse_header(lines, start, end)
+        end_index = read_tabledata(lines, end+1)
+        return end_index
+
 
 class Metadata(object):
     def __init__(self, name, lines, start, end) -> None:
@@ -199,27 +338,21 @@ class Metadata(object):
             unit = None
             # check number
             if only_number.search(value_str) is not None:
-                print(value_str, "is number!")
                 if integer_number.match(value_str) is not None:
                     value = int(value_str)
                 else:
                     value = float(value_str)
             elif number_and_unit.search(value_str):
-                print(value_str, "is number and unit")
                 for u in unit_pattern.keys():
-                    print(f"\tchecking unit {u}")
                     if unit_pattern[u].search(value_str) is not None:
-                        print(f"matching {u}!")
                         unit = u
                         value_str = value_str.split(u)[0]
                         if integer_number.match(value_str):
                             value = int(value_str)
                         else:
                             value = float(value_str)
-                        print(f"\t{value}, {unit}")
                         break
             else:
-                print(value_str, "is string!")
                 value = value_str
             return value, unit
 
@@ -247,7 +380,7 @@ class Metadata(object):
 class ReproRun(object):
     def __init__(self, lines, start_index) -> None:
         self._start = start_index
-        self.end = start_index
+        self._end = start_index
         self._table = None
         self._metadata = None
         self._scan_repro(lines)
@@ -259,6 +392,14 @@ class ReproRun(object):
         elif "RePro" in self._metadata._root.sections[0].props:
             return self._metadata._root.sections[0].props["RePro"].values[0]
         return None
+
+    @property
+    def start_index(self):
+        return self._start
+
+    @property
+    def end_index(self):
+        return self._end
 
     def _find_repro_settings(self, lines):
         start_index = self._start
@@ -278,7 +419,13 @@ class ReproRun(object):
     def _scan_repro(self, lines):
         start, end = self._find_repro_settings(lines)
         self._metadata = Metadata("ReproSettings", lines, start, end)
-        
+        self._end = self._metadata.end
+        self._table = Table(self.name, lines, end)
+        self._end = self._table._end_index
+
+    def __repr__(self):
+        s = f"ReproRun: {self.name} (from {self.start_index} to {self.end_index})"
+        return s
 
 
 class StimuliDat(object):
@@ -317,160 +464,13 @@ class StimuliDat(object):
         self._general_metadata = Metadata("General settings", lines, start, end)
         while end < len(lines):
             repro_run = ReproRun(lines, end)
-            break
+            end = repro_run.end_index
             self._repro_runs.append(repro_run)
-        embed()
-        # while end_index < len(lines):
-        #     table, end_index = table_parser(lines, start_index=end_index)
-        #     tables.append(table)
-
-
-def table_parser(lines, start_index=0):
-    def find_header(lines, start_index=0):
-        """
-        Returns
-        -------
-        int:
-            start index of the table header
-        int:
-            end index of the table header
-        str: 
-            the Repro name if found
-        """
-        start = start_index
-        end = -1
-        found_header = False
-        repro_name = None
-        for l in lines[start:]:
-            l = l.strip()
-            if repro.search(l) is not None:
-                repro_name = l.split(":")[-1].strip()
-                print(l, repro_name)
-
-            if not l.startswith("#Key"):
-                start += 1
-                continue  # table key not found yet
-            else:
-                found_header = True
-                break
-
-        if not found_header:
-            return -1, -1, repro_name
-
-        end = start + 1
-        l = lines[end]
-        while l.startswith("#"):
-            end += 1
-            l = lines[end]
-        print(start, end-1, repro_name)
-        return start, end - 1, repro_name
-
-    def parse_columns(lines, index, start_pos, end_pos, subgroup):
-        colname_line = lines[index]
-        end_pos = end_pos if end_pos > 0 else len(colname_line) + 10
-
-        colnames = re.split(r'\s{2,}', colname_line[1:].strip())
-        colname_indices = []
-        for i, name in enumerate(colnames):
-            if i > 0:
-                colname_indices.append(colname_line.find(name, colname_indices[-1] + 1))
-            else:
-                colname_indices.append(colname_line.find(name))
-        coltype_line = lines[index+1]
-        coltypes = re.split(r'\s{2,}', coltype_line[1:].strip())
-        colnumber_line = lines[index+2]
-        colnumbers = re.split(r'\s{2,}', colnumber_line[1:].strip())
-        for i, (name, position) in enumerate(zip(colnames, colname_indices)):
-            if position >= start_pos and position < end_pos:
-                logging.debug(f"subgroup {subgroup.name} ({start_pos} to {end_pos}) has column {name} @ {position}")
-                column = Column(name, int(colnumbers[i]), coltypes[i])
-                subgroup.add_column(column)
-
-    def parse_subgroups(lines, index, start_pos, end_pos, col_group):
-        line = lines[index]
-        end_pos = end_pos if end_pos > -1 else len(line) + 10
-        subgroup_names = re.split(r'\s{2,}', line[1:].strip())
-        subgroup_indices = []
-        for i, n in enumerate(subgroup_names):
-            n = n + " " if i < (len(subgroup_names) - 1) else n
-            name_index = line.find(n, (0 if len(subgroup_indices) == 0 else subgroup_indices[i-1]))
-            subgroup_indices.append(name_index)
-
-        for i, (name, position) in enumerate(zip(subgroup_names, subgroup_indices)):
-            if position >= start_pos and position < end_pos:
-                logging.debug(f"column_group {col_group.name} ({start_pos} to {end_pos}) has subgroup {name} @ {position}")
-                sub = ColumnSubgroup(name)
-                col_group.add_subgroup(sub)
-                end_position = -1 if i >= len(subgroup_indices)-1 else subgroup_indices[i+1]-1
-                parse_columns(lines, index + 1, position, end_position, sub)
-
-    def parse_column_groups(lines, index, t):
-        line = lines[index]
-        col_group_names = re.split(r'\s{2,}', line[1:].strip())
-        col_group_indices = [line.find(sub) for sub in col_group_names]
-
-        for i, (start_pos, name) in enumerate(zip(col_group_indices, col_group_names)):
-            end_pos = -1 if i >= len(col_group_indices)-1 else col_group_indices[i+1]-1
-            g = ColumnGroup(name)
-            logging.debug(f"New column group: {g.name}...")
-            parse_subgroups(lines, index+1, start_pos, end_pos, g)
-            t.add_column_group(g)
-
-    def parse_header(lines, start_index, end_index, repro_name="Test"):
-        assert(lines[start_index].startswith("#Key"))
-        assert(end_index - start_index == 5)
-        table = Table(repro_name)
-        parse_column_groups(lines, start_index+1, table)
-        return table
-
-    def read_tabledata(lines, start_index, table):
-        def convert_data(d, dt):
-            if dt == int:
-                d = int(d)
-            elif dt == float:
-                d = float(d)
-            else:
-                d = str(d)
-            return d
-
-        def guess_column_dtype(d):
-            if integer_number.match(d) or only_number.match(d):
-                return float
-            else:
-                return str
-
-        columns = [table.find_column(i+1) for i in range(table.column_count)]
-        dtypes = [float for c in columns]
-        end_index = start_index
-        for line in lines[start_index:]:
-            line = line.strip()
-
-            if len(line) > 0:
-                data = re.split(r'\s{2,}', line)
-                for i, (c, dt) in enumerate(zip(columns, dtypes)):
-                    if end_index == start_index:
-                        dt = guess_column_dtype(data[i].strip())
-                        dtypes[i] = dt
-                    try:
-                        d = convert_data(data[i].strip(), dt)
-                    except:
-                        d = str(d)
-                    c.append_data(d)
-            else:
-                break
-            end_index += 1
-        return end_index
-
-    start, end, name = find_header(lines, start_index)
-    print(start, end, name)
-    table = parse_header(lines, start, end, name)
-    end_index = read_tabledata(lines, end+1, table)
-    return table, end_index
-
 
 if __name__ == "__main__":
     stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
     stimdat = StimuliDat("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
+    embed()
     # lines = f.readlines()
     # f.close()
     # logging.basicConfig(level=logging._nameToLevel["INFO"], force=True)
