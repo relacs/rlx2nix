@@ -244,6 +244,43 @@ class Metadata(object):
                 p.unit = unit
 
 
+class ReproRun(object):
+    def __init__(self, lines, start_index) -> None:
+        self._start = start_index
+        self.end = start_index
+        self._table = None
+        self._metadata = None
+        self._scan_repro(lines)
+
+    @property
+    def name(self):
+        if "repro" in self._metadata._root.sections[0].props:
+            return self._metadata._root.sections[0].props["repro"].values[0]
+        elif "RePro" in self._metadata._root.sections[0].props:
+            return self._metadata._root.sections[0].props["RePro"].values[0]
+        return None
+
+    def _find_repro_settings(self, lines):
+        start_index = self._start
+        index = start_index
+        line = lines[index].strip()
+        while len(line) == 0:
+            index += 1
+            start_index = index
+            line = lines[index].strip()
+
+        while not line.startswith("#Key"):
+            index += 1
+            line = lines[index]
+
+        return start_index, index
+
+    def _scan_repro(self, lines):
+        start, end = self._find_repro_settings(lines)
+        self._metadata = Metadata("ReproSettings", lines, start, end)
+        
+
+
 class StimuliDat(object):
     
     def __init__(self, filename, loglevel="ERROR") -> None:
@@ -278,6 +315,10 @@ class StimuliDat(object):
 
         start, end = self.find_general_metadata(lines)
         self._general_metadata = Metadata("General settings", lines, start, end)
+        while end < len(lines):
+            repro_run = ReproRun(lines, end)
+            break
+            self._repro_runs.append(repro_run)
         embed()
         # while end_index < len(lines):
         #     table, end_index = table_parser(lines, start_index=end_index)
@@ -420,7 +461,6 @@ def table_parser(lines, start_index=0):
             end_index += 1
         return end_index
 
-
     start, end, name = find_header(lines, start_index)
     print(start, end, name)
     table = parse_header(lines, start, end, name)
@@ -430,9 +470,7 @@ def table_parser(lines, start_index=0):
 
 if __name__ == "__main__":
     stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
-    from IPython import embed
-    embed()
-    # f = open("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
+    stimdat = StimuliDat("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
     # lines = f.readlines()
     # f.close()
     # logging.basicConfig(level=logging._nameToLevel["INFO"], force=True)
