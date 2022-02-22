@@ -19,13 +19,13 @@ from .traces import EventTrace, RawTrace
 
 from IPython import embed
 
-units = ["mV", "sec", "min", "uS/cm", "C", "°C", "Hz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
+units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
 unit_pattern = {}
 for unit in units:
-    unit_pattern[unit] = re.compile(f"{unit}$", re.IGNORECASE|re.UNICODE)
-only_number = re.compile("^([+-]?\\d+\\.?\\d+)$")
+    unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
+only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
 integer_number = re.compile("^[+-]?\\d+$")
-number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d+)\\s?\\w+(/\\w+)?$")
+number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
 
 class Converter(object):
 
@@ -37,6 +37,8 @@ class Converter(object):
         self._output = output_name
         self._event_traces = None
         self._raw_traces = None
+        self._raw_data_arrays = {}
+        self._event_data_arrays = {}
         self._force = force
         self.preflight()
 
@@ -154,6 +156,7 @@ class Converter(object):
         return info
 
     def read_channel_config(self):
+        logging.info("Reading channel configuration ...")
         ids = [f"identifier{i}" for i in range(1, len(self._raw_traces)+1)]
         units = [f"unit{i}" for i in range(1, len(self._raw_traces)+1)]
         sampling_intervals = [f"sample interval{i}" for i in range(1, len(self._raw_traces)+1)]
@@ -253,6 +256,7 @@ class Converter(object):
 
     def open_nix_file(self):
         info = self.read_info_file()
+        logging.info(f"Creating output file {self._output} ...")
         nf = nix.File.open(self._output, nix.FileMode.Overwrite)
         dataset_name = os.path.split(self._output)[-1].strip(".nix")
 
@@ -274,6 +278,7 @@ class Converter(object):
             da.unit = channel_config[rt._trace_no]["unit"]
             si = float(channel_config[rt._trace_no]["sampling interval"][:-2]) / 1000.
             da.append_sampled_dimension(si, unit="s")
+            self._raw_data_arrays[rt] = da
 
     def convert_event_traces(self, block):
 
@@ -296,17 +301,145 @@ class Converter(object):
             da.unit = "s"
             da.append_range_dimension_using_self()
             da.definition = f"Events detected in {et.inputtrace}"
+            self._event_data_arrays[et] = da
+
+    def read_stimuli_file(self):
+        def has_signal(line, col_names):
+            """
+            Checks whether a signal/stimulus was given in the line.
+            :param line: the current line of the data table
+            :param col_names: The names of the table header columns
+            :return: whether or not any of the signal entries is not empty ("-")
+            """
+            values = line.split()
+            found_signal = False
+            delay = 0.0
+            for i, n in enumerate(col_names):
+                if n.lower() == "signal" and i < len(values) and not found_signal:
+                    if len(values[i].strip()) > 0 and (values[i].strip()[0] != "-" and values[i].strip() != "init"):
+                        found_signal = True
+                if n.lower() == "delay":
+                    delay = float(values[i].strip())/1000.0
+            return found_signal, delay
+
+        def parse_table(lines, start_index):
+            """
+            :param lines:
+            :param start_index:
+            :return:
+            """
+            data_indices = {}
+            stimulus_count = 0
+            names = re.split(r'\s{2,}', lines[start_index + 3][1:].strip())
+            while start_index < len(lines):
+                l = lines[start_index].strip()
+                if len(l) == 0:
+                    start_index += 1
+                    break  # empty line between repro runs stop processing of this run
+                elif l.startswith("#"):
+                    start_index += 1
+                    continue  # ignore, is a comment
+                else:
+                    signal_present, delay = has_signal(l, names)
+                    if stimulus_count == 0 and signal_present:
+                        data_indices[stimulus_count] = (l.split()[0], delay)
+                        stimulus_count += 1
+                    elif stimulus_count > 0:
+                        data_indices[stimulus_count] = (l.split()[0], delay)
+                        stimulus_count += 1
+                    start_index += 1
+            return data_indices, start_index
+
+        def parse_metadata_line(line):
+            if not line.startswith("#"):
+                return None, None
+
+            line = line.strip("#").strip()
+            parts = line.split(":")
+            if len(parts) == 0:
+                return None, None
+            if len(parts) == 1 or len(parts[-1].strip()) == 0:
+                return parts[0].strip(), None
+            else:
+                return parts[0].strip(), parts[-1].strip()
+
+        repro_settings = []
+        stimulus_indices = []
+        settings = {}
+        with open(os.path.join(self._folder, 'stimuli.dat'), 'r') as f:
+            lines = f.readlines()
+            index = 0
+            current_section = None
+            current_section_name = ""
+            while index < len(lines):
+                l = lines[index].strip()
+                if len(l) == 0:
+                    index += 1
+                elif l.startswith("#") and "key" not in l.lower():
+                    name, value = parse_metadata_line(l)
+                    if not name:
+                        continue
+                    if name and not value:
+                        if current_section:
+                            settings[current_section_name] = current_section.copy()
+
+                        current_section = {}
+                        current_section_name = name
+                    else:
+                        current_section[name] = value
+                    index += 1
+                elif l.lower().startswith("#key"):  # table data coming, need to parse that secion separately
+                    data, index = parse_table(lines, index)
+                    # we are done with this repro run, collect results
+                    stimulus_indices.append(int(data))
+                    settings[current_section_name] = current_section.copy()
+                    repro_settings.append(settings.copy())
+                    current_section = None
+                    settings = {}
+                else: # data lines, ignore them
+                    index += 1
+        return repro_settings, stimulus_indices
+
+    def export_sam(self, nixfile, settings, indices):
+
+        pass
+
+    def convert_stimuli(self, nixfile, repro_settings, stimulus_indices, channel_config):
+        def get_repro_name(settings):
+            name = ""
+            if "RePro-Info (relacs/repro)" in settings:
+                name = settings["RePro-Info (relacs/repro)"]["RePro"]
+            elif "project" in settings:
+                name = settings["project"]["repro"]
+            return name
+
+        def get_repro_start(settings, stimulus_indices, samplerate):
+            repro_name = get_repro_name(settings)
+            starts = []
+            for index in stimulus_indices:
+                start_index, delay = stimulus_indices[index]
+                starts.append(start_index/float(samplerate) - delay)
+
+            return repro_name, starts
+
+        repro_names, start_times = [], []
+
+        for settings, indices in zip(repro_settings, stimulus_indices):
+            samplerate = 1000.0/float(channel_config[1]["sampling interval"][:-2])
+            name, start_times = get_repro_start(settings, indices, samplerate)
+            repro_names.append(name)
+            start_times.append(start_times)
+            print(name, start_times)
+        return
 
 
     def convert(self):
         logging.info("Converting dataset {self._folder} to nix file {self._output}!")
-        channel_config = self.read_channel_config()
-        logging.debug("Got channel configuration!")
+        
         channel_config = self.read_channel_config()
         nf = self.open_nix_file()
         self.convert_raw_traces(nf, channel_config)
         self.convert_event_traces(nf.blocks[0])
-        embed()
-        nf.close()
-        exit()
+        settings, stimulus_indices = self.read_stimuli_file()
+        self.convert_stimuli(nf, settings, stimulus_indices, channel_config)
         nf.close()
