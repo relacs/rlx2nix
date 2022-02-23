@@ -13,12 +13,13 @@ converts file-based relacs data files to nix files, does not convert repro-writt
 * convert event traces to DataArrays (relacs.data.event) --> Done
 * read stimuli.dat and get the repros and when they were run --> Done
 * figure out why the start index of baselineactivity was not read from file for dataset 2012-03-23... --> Done
-* write RePro Tags to file
-* Bind tags to traces
-* add metadata to repro tags
+* write RePro Tags to file --> Done
+* Bind tags to traces --> Done
+* add metadata to repro tags --> Done
 * figure out when the stimuli were run and how long they lasted
 * figure out which properties must be stored as mutables.
 * write Stimulus MultiTags to file
 * bind them to the traces
 * add metadata
 * add features
+* rename event and data trace types

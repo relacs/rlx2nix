@@ -6,13 +6,11 @@
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted under the terms of the BSD License. See
 # LICENSE file in the root of the Project.
-import enum
 import re
 import os
 import glob
 import logging
 import subprocess
-from turtle import delay
 import numpy as np
 import nixio as nix
 
@@ -45,6 +43,7 @@ class Converter(object):
         self._force = force
         self._nixfile = None
         self._block = None
+        self._repro_tags = {}
         self.preflight()
 
     def preflight(self):
@@ -248,7 +247,7 @@ class Converter(object):
             for k in metadata.keys():
                 if isinstance(metadata[k], dict):
                     sec = parent_section.create_section(k, k.lower())
-                    self.convert_dataset_info(metadata[k], self._nixfile, sec)
+                    self.convert_dataset_info(metadata[k], sec)
                 else:  # is property
                     value, unit = self.parse_value(metadata[k])
                     if value is None:
@@ -262,16 +261,14 @@ class Converter(object):
     def open_nix_file(self):
         info = self.read_info_file()
         logging.info(f"Creating output file {self._output} ...")
-        nf = nix.File.open(self._output, nix.FileMode.Overwrite)
+        self._nixfile = nix.File.open(self._output, nix.FileMode.Overwrite)
         dataset_name = os.path.split(self._output)[-1].strip(".nix")
 
-        block = nf.create_block(dataset_name, "relacs.recording")
-        sec = nf.create_section(dataset_name, "relacs.recording")
-        block.metadata = sec
+        self._block = self._nixfile.create_block(dataset_name, "relacs.recording")
+        sec = self._nixfile.create_section(dataset_name, "relacs.recording")
+        self._block.metadata = sec
         sec.create_property("relacs-nix version", 1.1)
-        self.convert_dataset_info(info, nf, sec)
-        self._nixfile = nf
-        self._block = block
+        self.convert_dataset_info(info, sec)
 
     def convert_raw_traces(self, channel_config):
         logging.info("Converting raw traces, this may take a little while...")
@@ -288,7 +285,7 @@ class Converter(object):
     def convert_event_traces(self):
 
         def read_event_data(filename):
-            logging.info(f"Reading event times from file {filename}...")
+            logging.info(f"... reading event times from file {filename}...")
             times = []
             with open(filename, 'r') as f:
                 for l in f:
@@ -326,6 +323,16 @@ class Converter(object):
         
         # stimuli, start, end, durations = stimuli
         return
+
+    def odml2nix(self, odml_section, nix_section):
+        for op in odml_section.props:
+            nixp = nix_section.create_property(op.name, op.values)
+            if op.unit is not None:
+                nixp.unit = op.unit
+
+        for osec in odml_section.sections:
+            nsec = nix_section.create_section(osec.name, osec.type)
+            self.odml2nix(osec, nsec)
 
     def convert_repro_runs(self):
         def repro_times(reprorun, sampleinterval):
@@ -378,23 +385,35 @@ class Converter(object):
             return repro_names, repro_metadata, repro_starts, repro_durations
 
         def store_repro_runs(repro_names, repro_metadata, start_times, durations):
+            exculded_refs = ["restart", "recording", "stimulus"]
             for name, metadata, start, duration in zip(repro_names, repro_metadata, start_times, durations):
-                logging.info(f"\t... storing {name} which ran from {start} to {start + duration}.")
-            embed()
-            pass
+                logging.debug(f"... storing {name} which ran from {start} to {start + duration}.")
+                tag = self._block.create_tag(name, "relacs.repro_run", position=[start])
+                tag.extent = [duration]
+                for et in self._event_data_arrays:
+                    if et not in exculded_refs:
+                        tag.references.append(self._event_data_arrays[et])
+                for rt in self._raw_data_arrays:
+                    tag.references.append(self._raw_data_arrays[rt])
+                tag.metadata = self._nixfile.create_section(name, "relacs.repro")
+                self.odml2nix(metadata, tag.metadata)
+                self._repro_tags[name] = tag
 
-        logging.info(f"Converting RePro runs...")
         names, metadata, starts, durations = repro_runs()
+        logging.info("Converting RePro runs...")
+
         store_repro_runs(names, metadata, starts, durations)
+        embed()
 
     def convert(self):
-        logging.info("Converting dataset {self._folder} to nix file {self._output}!")
+        logging.info(f"Converting dataset {self._folder} to nix file {self._output}!")
 
         channel_config = self.read_channel_config()
-        nf = self.open_nix_file()
+        self.open_nix_file()
         self.convert_raw_traces(channel_config)
         self.convert_event_traces()
+
         self._stimuli_dat = StimuliDat(os.path.join(self._folder, "stimuli.dat"))
         self.convert_repro_runs()
         self.convert_stimuli()
-        nf.close()
+        self._nixfile.close()
