@@ -25,6 +25,7 @@ class Column(object):
         self._type_or_unit = type_or_unit
         self._dtype = float
         self._data = []
+        self._parent = None
 
     @property
     def name(self):
@@ -42,6 +43,16 @@ class Column(object):
     def data(self):
         return np.array(self._data)
 
+    @property
+    def parent(self):
+        return self._parent
+
+    @parent.setter
+    def parent(self, parent):
+        if not isinstance(parent, ColumnSubgroup):
+            raise ValueError(f"A Column can only be child of a ColumnSubgroup not of {type(parent)}!")
+        self._parent = parent
+
     def append_data(self, data):
         self._data.append(data)
 
@@ -49,12 +60,22 @@ class Column(object):
         s = f"Column {self.number}: {self.name} type: {self.type_or_unit}"
         return s
 
+    def __len__(self):
+        return len(self.data)
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
 
 class ColumnSubgroup(object):
 
     def __init__(self, name: str) -> None:
         self._name = name
         self._columns = []
+        self._parent = None
 
     @property
     def name(self):
@@ -64,28 +85,48 @@ class ColumnSubgroup(object):
     def columns(self):
         return self._columns
 
+    @property
+    def parent(self):
+        return self._parent
+    
+    @parent.setter
+    def parent(self, parent):
+        if not isinstance(parent, ColumnGroup):
+            raise ValueError(f"A Column can only be child of a ColumnGroup not of {type(parent)}!")
+        self._parent = parent
+
     def add_column(self, col:Column):
         assert(isinstance(col, Column))
         self._columns.append(col)
+        col.parent = self
 
     @property
     def column_numbers(self):
         return [c.number for c in self.columns]
 
+    @property
     def column_names(self):
         return [c.name for c in self.columns]
 
     def column(self, key):
         if isinstance(key, int):
             if key in self.column_numbers:
-                return self._columns[self.column_numbers.index(key)]
+                return self.columns[self.column_numbers.index(key)]
         elif isinstance(key, str):
             if key in self.column_names:
-                return self._columns[self.column_names.index(key)]
+                return self.columns[self.column_names.index(key)]
         raise KeyError("Unknown column name or column number!")
 
     def __getitem__(self, key):
-        self.column(key)
+        return self.column(key)
+
+    def __contains__(self, key):
+        if isinstance(key, str):
+            return key in self.column_names
+        elif isinstance(key, int):
+            return self.column_numbers
+        else:
+            return False
 
     def __repr__(self) -> str:
         s = f"Subgroup {self.name}: with {len(self.columns)} columns."
@@ -97,6 +138,7 @@ class ColumnGroup(object):
     def __init__(self, name:str) -> None:
         self._name = name
         self._subgroups = []
+        self._parent = None
 
     @property
     def name(self):
@@ -106,9 +148,14 @@ class ColumnGroup(object):
     def subgroups(self):
         return self._subgroups
 
+    @property
+    def subgroup_names(self):
+        return [sg.name for sg in self.subgroups]
+
     def add_subgroup(self, subgroup:ColumnSubgroup):
         assert(isinstance(subgroup, ColumnSubgroup))
         self._subgroups.append(subgroup)
+        subgroup.parent = self
 
     @property
     def column_numbers(self):
@@ -121,15 +168,40 @@ class ColumnGroup(object):
     def column_count(self):
         return len(self.column_numbers)
 
+    @property
+    def parent(self):
+        return self._parent
+    
+    @parent.setter
+    def parent(self, parent):
+        if not isinstance(parent, Table):
+            raise ValueError(f"Parent must be an instance of type Table, not {type(parent)}.")
+        self._parent = parent
+
     def find_column(self, number):
         for sg in self.subgroups:
             if number in sg.column_numbers:
                 return sg.column(number)
         return None
     
-    # def __contains__(self, key):
-    #     pass
+    def columns_by_name(self, name):
+        cols = []
+        for sg in self.subgroups:
+            if name in sg:
+                cols.append(sg[name])
+        return cols
     
+    def __contains__(self, key):
+        return key in self.subgroup_names
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self.subgroups[key]
+        elif isinstance(key, str):
+            return self.subgroups[self.subgroup_names.index(key)]
+        else:
+            raise KeyError("Unknown key!")
+
     def __repr__(self) -> str:
         s = f"ColumnGroup {self.name} with {len(self.subgroups)} subgroups and {self.column_count} columns."
         return s
@@ -150,6 +222,7 @@ class Table(object):
     def add_column_group(self, col_group:ColumnGroup):
         assert(isinstance(col_group, ColumnGroup))
         self._column_groups.append(col_group)
+        col_group.parent = self
 
     @property
     def column_groups(self):
@@ -401,6 +474,14 @@ class ReproRun(object):
     def end_index(self):
         return self._end
 
+    @property
+    def metadata(self):
+        return self._metadata._root
+
+    @property
+    def table(self):
+        return self._table
+
     def _find_repro_settings(self, lines):
         start_index = self._start
         index = start_index
@@ -424,7 +505,7 @@ class ReproRun(object):
         self._end = self._table._end_index
 
     def __repr__(self):
-        s = f"ReproRun: {self.name} (from {self.start_index} to {self.end_index})"
+        s = f"ReproRun: {self.name} (lines {self.start_index} through {self.end_index})"
         return s
 
 
@@ -440,6 +521,22 @@ class StimuliDat(object):
             return
 
         self.scan_file()
+
+    @property
+    def settings(self):
+        return self._general_metadata._root
+
+    @property
+    def input_settings(self):
+        return self._general_metadata._root.find_related("analog input traces")
+
+    @property
+    def output_settings(self):
+        return self._general_metadata._root.find_related("analog output traces")
+
+    @property
+    def repro_runs(self):
+        return self._repro_runs
 
     def find_general_metadata(self, lines, start_index=0):
         index = start_index
@@ -466,6 +563,10 @@ class StimuliDat(object):
             repro_run = ReproRun(lines, end)
             end = repro_run.end_index
             self._repro_runs.append(repro_run)
+
+    def __repr__(self):
+        s = f"Stimuli.dat file content of dataset {os.path.split(self._filename)[-2]}."
+        return s
 
 if __name__ == "__main__":
     stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
