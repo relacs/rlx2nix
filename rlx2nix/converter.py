@@ -43,6 +43,8 @@ class Converter(object):
         self._event_data_arrays = {}
         self._stimuli_dat = None
         self._force = force
+        self._nixfile = None
+        self._block = None
         self.preflight()
 
     def preflight(self):
@@ -229,7 +231,7 @@ class Converter(object):
             value = value_str
         return value, unit
 
-    def convert_dataset_info(self, metadata, nixfile, parent_section=None):
+    def convert_dataset_info(self, metadata, parent_section=None):
         def split_list(value_str):
             results = None
             if len(value_str) == 0:
@@ -246,7 +248,7 @@ class Converter(object):
             for k in metadata.keys():
                 if isinstance(metadata[k], dict):
                     sec = parent_section.create_section(k, k.lower())
-                    self.convert_dataset_info(metadata[k], nixfile, sec)
+                    self.convert_dataset_info(metadata[k], self._nixfile, sec)
                 else:  # is property
                     value, unit = self.parse_value(metadata[k])
                     if value is None:
@@ -268,22 +270,22 @@ class Converter(object):
         block.metadata = sec
         sec.create_property("relacs-nix version", 1.1)
         self.convert_dataset_info(info, nf, sec)
+        self._nixfile = nf
+        self._block = block
 
-        return nf
-
-    def convert_raw_traces(self, nix_file, channel_config):
+    def convert_raw_traces(self, channel_config):
         logging.info("Converting raw traces, this may take a little while...")
-        block = nix_file.blocks[0]
+
         for rt in self._raw_traces:
             logging.info(f"... trace {rt._trace_no}: {rt.name}")
             data = np.fromfile(os.path.join(self._folder, rt.filename), dtype=np.float32)
-            da = block.create_data_array(rt.name, "relacs.data.sampled", dtype=nix.DataType.Float, data=data)
+            da = self._block.create_data_array(rt.name, "relacs.data.sampled", dtype=nix.DataType.Float, data=data)
             da.unit = channel_config[rt._trace_no]["unit"]
             si = float(channel_config[rt._trace_no]["sampling interval"][:-2]) / 1000.
             da.append_sampled_dimension(si, unit="s")
             self._raw_data_arrays[rt] = da
 
-    def convert_event_traces(self, block):
+    def convert_event_traces(self):
 
         def read_event_data(filename):
             logging.info(f"Reading event times from file {filename}...")
@@ -300,14 +302,32 @@ class Converter(object):
         for et in self._event_traces:
             logging.info(f"... trace {et.name}")
             event_times = read_event_data(et._filename)
-            da = block.create_data_array(et.name, "relacs.data.events", data=event_times)
+            da = self._block.create_data_array(et.name, "relacs.data.events", data=event_times)
             da.unit = "s"
             da.append_range_dimension_using_self()
             da.definition = f"Events detected in {et.inputtrace}"
             self._event_data_arrays[et] = da
 
-    def convert_stimuli(self, nixfile):
+    def convert_stimuli(self):
+        def stimulus_times(reprorun, sampleinterval):
+            index_col = reprorun.table.find_column(1)
+            stimulus_grp = reprorun.table["stimulus"]
+            signals = stimulus_grp.columns_by_name("signal")
 
+            is_init = np.any(np.array([s[0] for s in signals], dtype=object) == "init")
+            delay_cols = stimulus_grp.columns_by_name("delay")
+            pass
+        
+        def stimuli():
+            starts, ends, durations = [], [], []
+
+            return starts, ends, durations
+
+        
+        # stimuli, start, end, durations = stimuli
+        return
+
+    def convert_repro_runs(self):
         def repro_times(reprorun, sampleinterval):
             index_col = reprorun.table.find_column(1)
             stimulus_grp = reprorun.table["stimulus"]
@@ -335,6 +355,7 @@ class Converter(object):
             repro_starts = []
             repro_ends = []
             repro_durations = []
+            repro_metadata = []
             sampleinterval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] /1000
             counter = {}
             for i, rr in enumerate(self._stimuli_dat.repro_runs):
@@ -347,41 +368,33 @@ class Converter(object):
                 repro_starts.append(start)
                 repro_durations.append(end - start)
                 repro_ends.append(end)
+                repro_metadata.append(rr.metadata)
 
             for i, (start, end , duration) in enumerate(zip(repro_starts, repro_ends, repro_durations)):
                 if duration < sampleinterval and i < len(repro_starts) -1:
                     repro_durations[i] = repro_starts[i+1] - start
                     repro_ends[i] = repro_starts[i+1]
-                print(f"repro {repro_names[i]} ran from {start} to {end} for {repro_durations[i]}s!")
 
-            return repro_starts, repro_ends, repro_durations
+            return repro_names, repro_metadata, repro_starts, repro_durations
 
-        def stimulus_times(reprorun, sampleinterval):
-            index_col = reprorun.table.find_column(1)
-            stimulus_grp = reprorun.table["stimulus"]
-            signals = stimulus_grp.columns_by_name("signal")
-
-            is_init = np.any(np.array([s[0] for s in signals], dtype=object) == "init")
-            delay_cols = stimulus_grp.columns_by_name("delay")
+        def store_repro_runs(repro_names, repro_metadata, start_times, durations):
+            for name, metadata, start, duration in zip(repro_names, repro_metadata, start_times, durations):
+                logging.info(f"\t... storing {name} which ran from {start} to {start + duration}.")
+            embed()
             pass
-        
-        def stimuli():
-            starts, ends, durations = [], [], []
 
-            return starts, ends, durations
-
-        repros, stats, ends, durations = repro_runs()
-        # stimuli, start, end, durations = stimuli
-        return
-
+        logging.info(f"Converting RePro runs...")
+        names, metadata, starts, durations = repro_runs()
+        store_repro_runs(names, metadata, starts, durations)
 
     def convert(self):
         logging.info("Converting dataset {self._folder} to nix file {self._output}!")
 
         channel_config = self.read_channel_config()
         nf = self.open_nix_file()
-        self.convert_raw_traces(nf, channel_config)
-        self.convert_event_traces(nf.blocks[0])
+        self.convert_raw_traces(channel_config)
+        self.convert_event_traces()
         self._stimuli_dat = StimuliDat(os.path.join(self._folder, "stimuli.dat"))
-        self.convert_stimuli(nf, channel_config)
+        self.convert_repro_runs()
+        self.convert_stimuli()
         nf.close()
