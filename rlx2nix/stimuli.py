@@ -11,7 +11,7 @@ integer_number = re.compile("^[+-]?\\d+$")
 number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
 repro = re.compile(".+RePro.*:{1}.+", re.IGNORECASE)
 
-units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
+units = ["mV", "mV/cm", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
 unit_pattern = {}
 for unit in units:
     unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
@@ -383,8 +383,9 @@ class Table(object):
                             dtypes[i] = dt
                         try:
                             d = convert_data(data[i].strip(), dt)
-                        except:
+                        except Exception as e:
                             d = str(d)
+                            logging.debug(e, exc_info=True)
                         c.append_data(d)
                 else:
                     break
