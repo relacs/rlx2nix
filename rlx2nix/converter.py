@@ -9,14 +9,20 @@
 import re
 import os
 import glob
+from turtle import pos
+import odml
 import logging
 import subprocess
 import numpy as np
 import nixio as nix
+from rsa import sign
 
 from .config import ConfigFile
 from .traces import EventTrace, RawTrace
 from .stimuli import StimuliDat
+from .util import parse_value
+from .stimdescription import parse_stimulus_description
+
 from IPython import embed
 
 units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
@@ -26,6 +32,7 @@ for unit in units:
 only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
 integer_number = re.compile("^[+-]?\\d+$")
 number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
+
 
 class Converter(object):
 
@@ -44,6 +51,7 @@ class Converter(object):
         self._nixfile = None
         self._block = None
         self._repro_tags = {}
+        self._stimulus_mtags = {}
         self.preflight()
 
     def preflight(self):
@@ -198,6 +206,13 @@ class Converter(object):
             logging.error("Found no stimuli.dat file! Abort!")
             raise ValueError("No stimuli.dat file found!")
 
+    def find_stimulus_descriptions(self):
+        logging.debug("Scanning stimulus-descriptions.dat!")
+        filename = os.path.join(self._folder, "stimulus-descriptions.dat")
+        if not os.path.exists(filename):
+            logging.error("Stimulus descriptions {filename} does not exist!")
+            raise ValueError("No stimulus descriptions file found!")
+
     def check_folder(self):
         logging.debug("Checking folder structure: ...")
         self._raw_traces, self._event_traces = self.find_traces()
@@ -205,6 +220,8 @@ class Converter(object):
         logging.debug("Found info file!")
         self.find_stimulus_info()
         logging.debug("Found stimulus information!")
+        self.find_stimulus_descriptions()
+        logging.debug("Found stimulus descriptions!")
         return True
 
     def parse_value(self, value_str):
@@ -216,7 +233,7 @@ class Converter(object):
                 value = int(value_str)
             else:
                 value = float(value_str)
-        elif number_and_unit.search(value_str):
+        elif number_and_unit.search(value_str) is not None:
             for u in unit_pattern.keys():
                 if unit_pattern[u].search(value_str) is not None:
                     unit = u
@@ -306,32 +323,183 @@ class Converter(object):
             self._event_data_arrays[et] = da
 
     def convert_stimuli(self):
-        def stimulus_times(reprorun, sampleinterval):
+        def stimulus_descriptions(repro_name, reprorun, sampleinterval):
+            def skip_first_index(signals):
+                skip = True
+                for s in signals:
+                    skip = skip and s.data[0].strip() == "-"
+                return skip
+
+            def find_active_signal(signals, stimulus_no):
+                for i, s in enumerate(signals):
+                    if s.data[stimulus_no].strip() != "-":
+                        return i
+
+            def parse_parameter(parameter_str):
+                props = []
+                if parameter_str.strip().startswith("\""):
+                    parameter_str = parameter_str[1:-1]
+                parts = parameter_str.split(",")
+                for p in parts:
+                    name = p.split(":")[0].strip()
+                    value_str = p.split(":")[-1].strip()
+                    value, unit = parse_value(value_str)
+                    props.append(odml.Property(name=name, value=value, unit=unit))
+                return props
+
+            stimuli = []
+
+            stimulus_columns = reprorun.table["stimulus"]
+            signals = stimulus_columns.columns_by_name("signal")
+            skip_first  = skip_first_index(signals)
             index_col = reprorun.table.find_column(1)
-            stimulus_grp = reprorun.table["stimulus"]
-            signals = stimulus_grp.columns_by_name("signal")
+            abstimes = stimulus_columns.columns_by_name("time")[0]
+            delays = stimulus_columns.columns_by_name("delay")[0]
+            durations = stimulus_columns.columns_by_name("duration")
+            amplitudes = stimulus_columns.columns_by_name("amplitude")
+            parameters = stimulus_columns.columns_by_name("parameter")
 
-            is_init = np.any(np.array([s[0] for s in signals], dtype=object) == "init")
-            delay_cols = stimulus_grp.columns_by_name("delay")
-            pass
-        
-        def stimuli():
-            starts, ends, durations = [], [], []
+            for i in range(0 if not skip_first else 1, len(index_col)):
+                start_time = index_col[i] * sampleinterval
+                active = find_active_signal(signals, i)
+                characteristics = odml.Section(f"{repro_name}_{i}")
+                characteristics.create_property("signal", signals[active].data[i])
+                p = characteristics.create_property("start_time", start_time)
+                p.unit = "s"
+                dur = float(durations[active].data[i]) / (1000 if durations[active].type_or_unit == "ms" else 1)
+                p = characteristics.create_property("duration", dur)
+                p.unit = "s"
+                p = characteristics.create_property("amplitude", float(amplitudes[active].data[i]))
+                p.unit = amplitudes[active].type_or_unit
+                d = float(delays.data[i]) / (1000 if delays.type_or_unit == "ms" else 1)
+                p = characteristics.create_property("delay", d)
+                p.unit = "s"
+                at = float(abstimes.data[i]) / (1000 if abstimes.type_or_unit == "ms" else 1)
+                p = characteristics.create_property("abs_time", at)
+                p.unit = "s"
+                characteristics.create_property("repro_tag_id", self._repro_tags[repro_name].id)
+                if len(parameters) > 0:
+                    params = parse_parameter(parameters[active].data[i])
+                    for p in params:
+                        characteristics.append(p)
+                stimuli.append(characteristics)
+            return stimuli
 
-            return starts, ends, durations
+        def stimuli(sampleinterval):
+            stims = {}
+            counter = {}
+            stim_metadata = parse_stimulus_description(os.path.join(self._folder, "stimulus-descriptions.dat"))
+            for rr in self._stimuli_dat.repro_runs:
+                if rr.name in counter:
+                    counter[rr.name] += 1
+                else:
+                    counter[rr.name] = 1
+                if "BaselineActivity" in rr.name:
+                    continue  # there are no stimulus presented during baseline
+                repro_name = f"{rr.name}_{counter[rr.name]}"
+                stims[repro_name] = stimulus_descriptions(repro_name, rr, sampleinterval)
 
-        
-        # stimuli, start, end, durations = stimuli
+            return stims, stim_metadata
+
+        def store_stimuli(stims, stim_metadata):
+            def store_features(signal, features):
+                excluded_feats = ["start_time", "duration", "signal"]
+                fixed_feats = ["abs_time", "amplitude", "repro_tag_id"]
+                feats = {}
+                for i, feat in enumerate(features):
+                    for p in feat:
+                        if p.name in excluded_feats:
+                            continue
+                        if p.name not in feats:
+                            if p.dtype == "string":
+                                feats[p.name] = np.empty(len(features), dtype=object)
+                                feats[p.name][i] = p.values[0]
+                            else:
+                                feats[p.name] = np.empty(len(features))
+                        else:
+                            feats[p.name][i] = p.values[0]
+                for key in feats.keys():
+                    feat_name = f"{signal}_{key}"
+                    feat_type = f"relacs.feature.{key if key in fixed_feats else 'mutable'}"
+                    mtag = self._stimulus_mtags[signal]
+                    shape = (len(feats[key]), 1)
+                    data = np.reshape(feats[key], shape)
+                    dtype = nix.DataType.String if data.dtype == object else nix.DataType.Float
+                    feature_da = self._block.create_data_array(feat_name, feat_type, 
+                                                                shape= shape, dtype=dtype,
+                                                                data=data)
+                    feature_da.append_set_dimension()
+                    mtag.create_feature(feature_da, nix.LinkType.Indexed)
+                return None
+
+            unique_signals = []
+            signal_counts = {}
+            signal_starts = {}
+            signal_durations = {}
+            signal_features = {}
+            for repro_run in stims:
+                for stim in stims[repro_run]:
+                    signal = stim.props["signal"].values[0]
+                    if signal not in unique_signals:
+                        unique_signals.append(signal)
+                        signal_counts[signal] = 1
+                        signal_starts[signal] = [stim.props["start_time"].values[0]]
+                        signal_durations[signal] = [stim.props["duration"].values[0]]
+                        signal_features[signal] = [stim]
+                    else:
+                        signal_starts[signal].append(stim.props["start_time"].values[0])
+                        signal_durations[signal].append(stim.props["duration"].values[0])
+                        signal_counts[signal] += 1
+                        signal_features[signal].append(stim)
+
+            excluded_refs = ["restart", "recording", "stimulus"]
+            for signal in unique_signals:
+                positions = self._block.create_data_array(f"{signal}_onset_times", "relacs.stimulus.onset",
+                                                          data=np.atleast_2d(signal_starts[signal]).T)
+                positions.append_set_dimension()
+
+                extents = self._block.create_data_array(f"{signal}_durations", "relacs.stimulus.duration",
+                                                          data=np.atleast_2d(signal_durations[signal]).T)
+                extents.append_set_dimension()
+
+                mtag = self._block.create_multi_tag(signal, "relacs.stimulus.segment", positions=positions, 
+                                                    extents=extents)
+                self._stimulus_mtags[signal] = mtag
+                for et in self._event_data_arrays:
+                    if et not in excluded_refs:
+                        mtag.references.append(self._event_data_arrays[et])
+                for rt in self._raw_data_arrays:
+                    mtag.references.append(self._raw_data_arrays[rt])
+
+                if signal in stim_metadata.sections:
+                    metadata = stim_metadata[signal]
+                    mtag.metadata = self._nixfile.create_section(mtag.name, "relacs.stimulus")
+                    self.odml2nix(metadata, mtag.metadata)
+                store_features(signal, signal_features[signal])
+
+            return None
+
+        sampleinterval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] /1000
+        stims, metadata = stimuli(sampleinterval)
+        store_stimuli(stims, metadata)
+
         return
 
     def odml2nix(self, odml_section, nix_section):
         for op in odml_section.props:
-            nixp = nix_section.create_property(op.name, op.values)
+            values = op.values
+            if len(values) > 0:
+                nixp = nix_section.create_property(op.name, op.values)
+            else:
+                nixp = nix_section.create_property(op.name, nix.DataType.String)
             if op.unit is not None:
                 nixp.unit = op.unit
 
         for osec in odml_section.sections:
-            nsec = nix_section.create_section(osec.name, osec.type)
+            name = osec.name
+            if "/" in osec.name:
+                name = name.replace("/", "_")
+            nsec = nix_section.create_section(name, osec.type)
             self.odml2nix(osec, nsec)
 
     def convert_repro_runs(self):
@@ -385,13 +553,13 @@ class Converter(object):
             return repro_names, repro_metadata, repro_starts, repro_durations
 
         def store_repro_runs(repro_names, repro_metadata, start_times, durations):
-            exculded_refs = ["restart", "recording", "stimulus"]
+            excluded_refs = ["restart", "recording", "stimulus"]
             for name, metadata, start, duration in zip(repro_names, repro_metadata, start_times, durations):
                 logging.debug(f"... storing {name} which ran from {start} to {start + duration}.")
                 tag = self._block.create_tag(name, "relacs.repro_run", position=[start])
                 tag.extent = [duration]
                 for et in self._event_data_arrays:
-                    if et not in exculded_refs:
+                    if et not in excluded_refs:
                         tag.references.append(self._event_data_arrays[et])
                 for rt in self._raw_data_arrays:
                     tag.references.append(self._raw_data_arrays[rt])
@@ -401,9 +569,7 @@ class Converter(object):
 
         names, metadata, starts, durations = repro_runs()
         logging.info("Converting RePro runs...")
-
         store_repro_runs(names, metadata, starts, durations)
-        embed()
 
     def convert(self):
         logging.info(f"Converting dataset {self._folder} to nix file {self._output}!")
