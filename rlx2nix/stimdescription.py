@@ -2,8 +2,8 @@ from multiprocessing.sharedctypes import Value
 import os
 import odml
 
-from config import ConfigFormat
-from util import parse_value
+from .config import ConfigFormat
+from .util import parse_value
 
 
 def looks_like_section(line, format):
@@ -29,10 +29,21 @@ def looks_like_oldstyle(filename):
 def parse_section(line, format):
     if not looks_like_section(line, format):
             raise ValueError("Line {line} does not not look like a section definition for format {format}!")
+    name = ""
+    type = "n.s."
     if format == ConfigFormat.old:
-        return line.split(": ")[-1].strip()
+        name = line.split(": ")[-1].strip()
     else:
-        return line.split(":")[0].strip()
+        name = line.split(":")[0].strip()
+        if "(" in name and ")" in name:
+            parts = name.split("(")
+            name = parts[0].strip()
+            if name.startswith("\"") and name.endswith("\""):
+                name = name[1:-1]
+            type = parts[-1].replace(")", "").strip()
+            if "/" in type:
+                type = type.replace("/", ".")
+    return name, type
 
 
 def parse_property(line):
@@ -57,7 +68,8 @@ def parse_stimulus_description(filename):
             if len(l) == 0:
                 continue
             if looks_like_section(l, format):
-                section = root.create_section(parse_section(l, format))
+                name, type = parse_section(l, format)
+                section = root.create_section(name, type)
             else:
                 n, v, u = parse_property(l)
                 p = section.create_property(n, v)
@@ -66,11 +78,3 @@ def parse_stimulus_description(filename):
 
     return root
 
-if __name__ == "__main__":
-    from IPython import embed
-        # embed()
-    section = parse_stimulus_description("2012-03-23-ae-invivo-1/stimulus-descriptions.dat")
-    section.pprint()
-    print("*" * 20)
-    section = parse_stimulus_description("/data/invivo/2021-08-20-ar-invivo-2/stimulus-descriptions.dat")
-    section.pprint()
