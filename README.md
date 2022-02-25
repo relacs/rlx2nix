@@ -16,10 +16,10 @@ converts file-based relacs data files to nix files, does not convert repro-writt
 * write RePro Tags to file --> Done
 * Bind tags to traces --> Done
 * add metadata to repro tags --> Done
-* figure out when the stimuli were run and how long they lasted
-* figure out which properties must be stored as mutables.
-* write Stimulus MultiTags to file
-* bind them to the traces
-* add metadata
-* add features
-* rename event and data trace types
+* figure out when the stimuli were run and how long they lasted --> Done
+* figure out which properties must be stored as mutables. --> Done
+* write Stimulus MultiTags to file --> Done
+* bind them to the traces --> Done
+* add metadata --> Done
+* add features ---> Done
+* rename event and data trace types --> Done

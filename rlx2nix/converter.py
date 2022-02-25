@@ -293,7 +293,7 @@ class Converter(object):
         for rt in self._raw_traces:
             logging.info(f"... trace {rt._trace_no}: {rt.name}")
             data = np.fromfile(os.path.join(self._folder, rt.filename), dtype=np.float32)
-            da = self._block.create_data_array(rt.name, "relacs.data.sampled", dtype=nix.DataType.Float, data=data)
+            da = self._block.create_data_array(rt.name, f"relacs.data.sampled.{rt.name}", dtype=nix.DataType.Float, data=data)
             da.unit = channel_config[rt._trace_no]["unit"]
             si = float(channel_config[rt._trace_no]["sampling interval"][:-2]) / 1000.
             da.append_sampled_dimension(si, unit="s")
@@ -316,7 +316,7 @@ class Converter(object):
         for et in self._event_traces:
             logging.info(f"... trace {et.name}")
             event_times = read_event_data(et._filename)
-            da = self._block.create_data_array(et.name, "relacs.data.events", data=event_times)
+            da = self._block.create_data_array(et.name, f"relacs.data.events.{et.name}", data=event_times)
             da.unit = "s"
             da.append_range_dimension_using_self()
             da.definition = f"Events detected in {et.inputtrace}"
