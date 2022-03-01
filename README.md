@@ -23,3 +23,4 @@ converts file-based relacs data files to nix files, does not convert repro-writt
 * add metadata --> Done
 * add features ---> Done
 * rename event and data trace types --> Done
+* unclear how to handle "init" lines in FileStimulus repro runs. There, the real duration and the duration information in the stimuli.dat may be contradictory...

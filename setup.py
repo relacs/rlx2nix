@@ -1,4 +1,5 @@
 from setuptools import find_packages, setup
+
 from rlx2nix.info import infodict
 
 NAME = infodict["NAME"]
@@ -18,7 +19,7 @@ README = "README.md"
 with open(README) as f:
     description_text = f.read()
 
-install_req = ["nixio>=1.5", "python-odml"]
+install_req = ["nixio>=1.5", "python-odml", "numpy"]
 
 setup(
     name=NAME,
