@@ -9,29 +9,27 @@
 import re
 import os
 import glob
-from turtle import pos
 import odml
 import logging
 import subprocess
 import numpy as np
 import nixio as nix
-from rsa import sign
 
 from .config import ConfigFile
 from .traces import EventTrace, RawTrace
 from .stimuli import StimuliDat
-from .util import parse_value
+from .util import parse_value, odml2nix, only_number
 from .stimdescription import parse_stimulus_description
 
 from IPython import embed
 
-units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
-unit_pattern = {}
-for unit in units:
-    unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
-only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
-integer_number = re.compile("^[+-]?\\d+$")
-number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
+#units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
+#unit_pattern = {}
+#for unit in units:
+#    unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
+#only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
+#integer_number = re.compile("^[+-]?\\d+$")
+#number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
 
 
 class Converter(object):
@@ -224,29 +222,6 @@ class Converter(object):
         logging.debug("Found stimulus descriptions!")
         return True
 
-    def parse_value(self, value_str):
-        value = None
-        unit = None
-        # check number
-        if only_number.search(value_str) is not None:
-            if integer_number.match(value_str) is not None:
-                value = int(value_str)
-            else:
-                value = float(value_str)
-        elif number_and_unit.search(value_str) is not None:
-            for u in unit_pattern.keys():
-                if unit_pattern[u].search(value_str) is not None:
-                    unit = u
-                    value_str = value_str.split(u)[0]
-                    if integer_number.match(value_str):
-                        value = int(value_str)
-                    else:
-                        value = float(value_str)
-                    break
-        else:
-            value = value_str
-        return value, unit
-
     def convert_dataset_info(self, metadata, parent_section=None):
         def split_list(value_str):
             results = None
@@ -266,7 +241,7 @@ class Converter(object):
                     sec = parent_section.create_section(k, k.lower())
                     self.convert_dataset_info(metadata[k], sec)
                 else:  # is property
-                    value, unit = self.parse_value(metadata[k])
+                    value, unit = parse_value(metadata[k])
                     if value is None:
                         continue
                     if isinstance(value, str):
@@ -316,6 +291,7 @@ class Converter(object):
         for et in self._event_traces:
             logging.info(f"... trace {et.name}")
             event_times = read_event_data(et._filename)
+            print(len(event_times))
             da = self._block.create_data_array(et.name, f"relacs.data.events.{et.name}", data=event_times)
             da.unit = "s"
             da.append_range_dimension_using_self()
@@ -358,7 +334,6 @@ class Converter(object):
             durations = stimulus_columns.columns_by_name("duration")
             amplitudes = stimulus_columns.columns_by_name("amplitude")
             parameters = stimulus_columns.columns_by_name("parameter")
-
             for i in range(0 if not skip_first else 1, len(index_col)):
                 start_time = index_col[i] * sampleinterval
                 active = find_active_signal(signals, i)
@@ -474,7 +449,7 @@ class Converter(object):
                 if signal in stim_metadata.sections:
                     metadata = stim_metadata[signal]
                     mtag.metadata = self._nixfile.create_section(mtag.name, "relacs.stimulus")
-                    self.odml2nix(metadata, mtag.metadata)
+                    odml2nix(metadata, mtag.metadata)
                 store_features(signal, signal_features[signal])
 
             return None
@@ -484,23 +459,6 @@ class Converter(object):
         store_stimuli(stims, metadata)
 
         return
-
-    def odml2nix(self, odml_section, nix_section):
-        for op in odml_section.props:
-            values = op.values
-            if len(values) > 0:
-                nixp = nix_section.create_property(op.name, op.values)
-            else:
-                nixp = nix_section.create_property(op.name, nix.DataType.String)
-            if op.unit is not None:
-                nixp.unit = op.unit
-
-        for osec in odml_section.sections:
-            name = osec.name
-            if "/" in osec.name:
-                name = name.replace("/", "_")
-            nsec = nix_section.create_section(name, osec.type)
-            self.odml2nix(osec, nsec)
 
     def convert_repro_runs(self):
         def repro_times(reprorun, sampleinterval):
@@ -516,13 +474,18 @@ class Converter(object):
             duration = 0.0
             if "BaselineActivity" in reprorun.name:
                 duration = 0.0
+                end_time = start_time
             else:
                 for d in duration_cols:
                     dur = d[-1]
-                    if isinstance(dur, float):
+                    if isinstance(dur, (int, float)):
                         duration = dur / 1000
                         break
-            end_time = index_col[-1] * sampleinterval + duration
+                    elif isinstance(dur, str) and only_number.search(dur) is not None:
+                        duration = float(dur) / 1000
+                        break
+                end_time = index_col[-1] * sampleinterval + duration
+            logging.debug(f"Repro {reprorun.name} from {start_time} to {end_time}s")
             return start_time, end_time
 
         def repro_runs():
@@ -546,8 +509,10 @@ class Converter(object):
                 repro_metadata.append(rr.metadata)
 
             for i, (start, end , duration) in enumerate(zip(repro_starts, repro_ends, repro_durations)):
+                logging.debug(f"Duration {duration} for repro {repro_names[i]} and {i} < {len(repro_starts) - 1}")
                 if duration < sampleinterval and i < len(repro_starts) -1:
                     repro_durations[i] = repro_starts[i+1] - start
+                    logging.debug(f"\t new duration: {repro_durations[i]}")
                     repro_ends[i] = repro_starts[i+1]
 
             return repro_names, repro_metadata, repro_starts, repro_durations
@@ -564,7 +529,7 @@ class Converter(object):
                 for rt in self._raw_data_arrays:
                     tag.references.append(self._raw_data_arrays[rt])
                 tag.metadata = self._nixfile.create_section(name, "relacs.repro")
-                self.odml2nix(metadata, tag.metadata)
+                odml2nix(metadata, tag.metadata)
                 self._repro_tags[name] = tag
 
         names, metadata, starts, durations = repro_runs()

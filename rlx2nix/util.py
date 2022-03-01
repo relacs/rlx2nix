@@ -1,6 +1,7 @@
 import re
 import enum
-from socket import ALG_SET_KEY
+import nixio as nix
+
 
 class ValueType(enum.Enum):
     floating = 1
@@ -11,9 +12,9 @@ class ValueType(enum.Enum):
 
 only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
 integer_number = re.compile("^[+-]?\\d+$")
-number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
+number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+%?(/\\w+)?$")
 
-units = ["mV", "mV/cm", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
+units = ["mV", "mV/cm", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g", "%"]
 unit_pattern = {}
 for unit in units:
     unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
@@ -54,3 +55,21 @@ def parse_value(value_str):
                 value = convert_value(value_str, vt)
                 break
     return value, unit
+
+
+def odml2nix(odml_section, nix_section):
+    for op in odml_section.props:
+        values = op.values
+        if len(values) > 0:
+            nixp = nix_section.create_property(op.name, op.values)
+        else:
+            nixp = nix_section.create_property(op.name, nix.DataType.String)
+        if op.unit is not None:
+            nixp.unit = op.unit
+
+    for osec in odml_section.sections:
+        name = osec.name
+        if "/" in osec.name:
+            name = name.replace("/", "_")
+        nsec = nix_section.create_section(name, osec.type)
+        odml2nix(osec, nsec)

@@ -4,17 +4,9 @@ import odml
 import logging
 import numpy as np
 
-from IPython import embed
+from .util import ValueType, guess_value_type, parse_value
 
-only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
-integer_number = re.compile("^[+-]?\\d+$")
-number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
 repro = re.compile(".+RePro.*:{1}.+", re.IGNORECASE)
-
-units = ["mV", "mV/cm", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
-unit_pattern = {}
-for unit in units:
-    unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
 
 
 class Column(object):
@@ -364,7 +356,8 @@ class Table(object):
                 return d
 
             def guess_column_dtype(d):
-                if integer_number.match(d) or only_number.match(d):
+                vt = guess_value_type(d)
+                if vt == ValueType.integer or vt == ValueType.floating:
                     return float
                 else:
                     return str
@@ -399,36 +392,49 @@ class Table(object):
 
 
 class Metadata(object):
-    def __init__(self, name, lines, start, end) -> None:
+    def __init__(self, name, lines, start, end, rearrange=False) -> None:
         self.start = start
         self.end = end
         self._root = odml.Section(name)
         self._parse(lines)
+        if rearrange:
+            self._rearrange_metadata()
+
+
+    def _rearrange_metadata(self):
+        def is_oldstyle():
+            return "RePro-Info" not in self._root.sections
+
+        repro_metadata = odml.Section("RePro-metadata", type="relacs.reprometadata")
+        if is_oldstyle():
+            logging.info("Rearranging oldstyle metadata...")
+            root_props = {"repro":"RePro", "author":"Author", "version":"Version", "date":"Date", "run":"Run", "experiment":"Experiment"}
+            settings = self._root["project"]
+            repro_info = repro_metadata.create_section("RePro-Info", type="relacs.repro")
+            new_settings = repro_info.create_section("settings", type="relacs.repro.settings")
+            for p in settings.props:
+                if p.name in root_props:
+                    p.name = root_props[p.name]
+                    repro_info.insert(0, p)
+                else:
+                    new_settings.insert(0, p)
+            self._root = repro_metadata
+        else:
+            sections_to_keep = ["macros", "settings"]
+            logging.info("New style metadata")
+            new_settings = self._root.sections["RePro-Info"]
+            for s in self._root.sections:
+                if "RePro-Info" not in s.name and s.name in sections_to_keep:
+                    new_settings.insert(0, s)
+            settings = new_settings.sections["settings"]
+            for s in self._root.sections:
+                if "RePro-Info" not in s.name and s.name not in sections_to_keep:
+                    for p in s.props:
+                        settings.insert(0, p)
+            repro_metadata.append(new_settings)
+            self._root = repro_metadata
 
     def _parse(self, lines):
-
-        def parse_value(value_str):
-            value = None
-            unit = None
-            # check number
-            if only_number.search(value_str) is not None:
-                if integer_number.match(value_str) is not None:
-                    value = int(value_str)
-                else:
-                    value = float(value_str)
-            elif number_and_unit.search(value_str):
-                for u in unit_pattern.keys():
-                    if unit_pattern[u].search(value_str) is not None:
-                        unit = u
-                        value_str = value_str.split(u)[0]
-                        if integer_number.match(value_str):
-                            value = int(value_str)
-                        else:
-                            value = float(value_str)
-                        break
-            else:
-                value = value_str
-            return value, unit
 
         def looks_like_property(line):
             result = ":" in line and len(line.strip().split(": ")) > 1 and line.strip()[0] != "*"
@@ -443,7 +449,13 @@ class Metadata(object):
                 continue
             if looks_like_section(l):
                 name = l.strip().lstrip("# ").split(":")[0]
-                section = self._root.create_section(name)
+                type = "n.s."
+                if "(" in name and name.endswith(")"):
+                    parts = name.split("(") 
+                    name = parts[0].strip()
+                    type = parts[-1][:-1].strip()
+                    type = type.replace("/", ".")
+                section = self._root.create_section(name, type)
             elif looks_like_property(l):
                 parts = l.lstrip("#").strip().split(": ")
                 value, unit = parse_value(parts[1].strip())
@@ -461,10 +473,8 @@ class ReproRun(object):
 
     @property
     def name(self):
-        if "repro" in self._metadata._root.sections[0].props:
-            return self._metadata._root.sections[0].props["repro"].values[0]
-        elif "RePro" in self._metadata._root.sections[0].props:
-            return self._metadata._root.sections[0].props["RePro"].values[0]
+        if "RePro" in self._metadata._root["RePro-Info"].props:
+            return self._metadata._root["RePro-Info"].props["RePro"].values[0]
         return None
 
     @property
@@ -500,7 +510,7 @@ class ReproRun(object):
 
     def _scan_repro(self, lines):
         start, end = self._find_repro_settings(lines)
-        self._metadata = Metadata("ReproSettings", lines, start, end)
+        self._metadata = Metadata("ReproSettings", lines, start, end, rearrange=True)
         self._end = self._metadata.end
         self._table = Table(self.name, lines, end)
         self._end = self._table._end_index
@@ -572,7 +582,6 @@ class StimuliDat(object):
 if __name__ == "__main__":
     stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
     stimdat = StimuliDat("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
-    embed()
     # lines = f.readlines()
     # f.close()
     # logging.basicConfig(level=logging._nameToLevel["INFO"], force=True)
