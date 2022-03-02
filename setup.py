@@ -19,7 +19,7 @@ README = "README.md"
 with open(README) as f:
     description_text = f.read()
 
-install_req = ["nixio>=1.5", "python-odml", "numpy"]
+install_req = ["nixio>=1.5", "odML", "numpy"]
 
 setup(
     name=NAME,
