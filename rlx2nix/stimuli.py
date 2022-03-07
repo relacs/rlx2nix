@@ -205,7 +205,11 @@ class Table(object):
         self._name = name
         self._column_groups = []
         self._start_index = start_index
-        self._end_index = self.table_parser(lines, start_index)
+        self._end_index, self._valid = self.table_parser(lines, start_index)
+
+    @property
+    def valid(self):
+        return self._valid
 
     @property
     def name(self):
@@ -286,7 +290,10 @@ class Table(object):
             l = lines[end]
             while l.startswith("#"):
                 end += 1
-                l = lines[end]
+                if end < len(lines):
+                    l = lines[end]
+                else:
+                    break
             return start, end - 1, repro_name
 
         def parse_columns(lines, index, start_pos, end_pos, subgroup):
@@ -386,9 +393,14 @@ class Table(object):
             return end_index
 
         start, end, _ = find_header(lines, start_index)
+        if (end - start) != 5:
+            return end, False
         parse_header(lines, start, end)
         end_index = read_tabledata(lines, end+1)
-        return end_index
+        if (end + 1) == end_index:
+            return end_index, False
+
+        return end_index, True
 
 
 class Metadata(object):
@@ -409,6 +421,7 @@ class Metadata(object):
         if is_oldstyle():
             logging.info("Rearranging oldstyle metadata...")
             root_props = {"repro":"RePro", "author":"Author", "version":"Version", "date":"Date", "run":"Run", "experiment":"Experiment"}
+
             settings = self._root["project"]
             repro_info = repro_metadata.create_section("RePro-Info", type="relacs.repro")
             new_settings = repro_info.create_section("settings", type="relacs.repro.settings")
@@ -441,7 +454,7 @@ class Metadata(object):
             return result
 
         def looks_like_section(line):
-            return len(line) > 0 and not looks_like_property(line)
+            return "experiment" not in line and len(line) > 0 and not looks_like_property(line)
 
         section = self._root
         for l in lines[self.start:self.end]:
@@ -469,7 +482,12 @@ class ReproRun(object):
         self._end = start_index
         self._table = None
         self._metadata = None
+        self._valid = True
         self._scan_repro(lines)
+
+    @property
+    def valid(self):
+        return self._valid
 
     @property
     def name(self):
@@ -504,7 +522,10 @@ class ReproRun(object):
 
         while not line.startswith("#Key"):
             index += 1
-            line = lines[index]
+            if index < len(lines):
+                line = lines[index]
+            else:
+                break
 
         return start_index, index
 
@@ -514,9 +535,13 @@ class ReproRun(object):
         self._end = self._metadata.end
         self._table = Table(self.name, lines, end)
         self._end = self._table._end_index
+        self._valid = self._table.valid
 
+    def __str__(self):
+        return self.__repr__()
+    
     def __repr__(self):
-        s = f"ReproRun: {self.name} (lines {self.start_index} through {self.end_index})"
+        s = f"ReproRun: {self.name} (lines {self.start_index} through {self.end_index} valid {self.valid})"
         return s
 
 
@@ -570,7 +595,7 @@ class StimuliDat(object):
 
         start, end = self.find_general_metadata(lines)
         self._general_metadata = Metadata("General settings", lines, start, end)
-        while end < len(lines):
+        while end is not None and end < len(lines) -1:
             repro_run = ReproRun(lines, end)
             end = repro_run.end_index
             self._repro_runs.append(repro_run)
@@ -580,8 +605,11 @@ class StimuliDat(object):
         return s
 
 if __name__ == "__main__":
-    stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
-    stimdat = StimuliDat("/data/invivo/2021-08-20-ar-invivo-2/stimuli.dat")
+    #    stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
+    stimdat = StimuliDat("/data/invivo/2012-03-08-al-invivo-1/stimuli.dat")
+
+    from IPython import embed
+    embed()
     # lines = f.readlines()
     # f.close()
     # logging.basicConfig(level=logging._nameToLevel["INFO"], force=True)

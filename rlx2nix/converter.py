@@ -208,8 +208,9 @@ class Converter(object):
         logging.debug("Scanning stimulus-descriptions.dat!")
         filename = os.path.join(self._folder, "stimulus-descriptions.dat")
         if not os.path.exists(filename):
-            logging.error("Stimulus descriptions {filename} does not exist!")
-            raise ValueError("No stimulus descriptions file found!")
+            logging.warning("Stimulus descriptions file {filename} does not exist!")
+            return False
+        return True
 
     def check_folder(self):
         logging.debug("Checking folder structure: ...")
@@ -218,8 +219,11 @@ class Converter(object):
         logging.debug("Found info file!")
         self.find_stimulus_info()
         logging.debug("Found stimulus information!")
-        self.find_stimulus_descriptions()
-        logging.debug("Found stimulus descriptions!")
+        stim_descriptions_found = self.find_stimulus_descriptions()
+        if stim_descriptions_found:
+            logging.debug("Found stimulus descriptions!")
+        else:
+            logging.debug("Did not find stimulus descriptions!")
         return True
 
     def convert_dataset_info(self, metadata, parent_section=None):
@@ -291,7 +295,6 @@ class Converter(object):
         for et in self._event_traces:
             logging.info(f"... trace {et.name}")
             event_times = read_event_data(et._filename)
-            print(len(event_times))
             da = self._block.create_data_array(et.name, f"relacs.data.events.{et.name}", data=event_times)
             da.unit = "s"
             da.append_range_dimension_using_self()
@@ -300,6 +303,7 @@ class Converter(object):
 
     def convert_stimuli(self):
         def stimulus_descriptions(repro_name, reprorun, sampleinterval):
+            
             def skip_first_index(signals):
                 skip = True
                 for s in signals:
@@ -324,7 +328,6 @@ class Converter(object):
                 return props
 
             stimuli = []
-
             stimulus_columns = reprorun.table["stimulus"]
             signals = stimulus_columns.columns_by_name("signal")
             skip_first  = skip_first_index(signals)
@@ -333,6 +336,9 @@ class Converter(object):
             delays = stimulus_columns.columns_by_name("delay")[0]
             durations = stimulus_columns.columns_by_name("duration")
             amplitudes = stimulus_columns.columns_by_name("amplitude")
+            if len(amplitudes) == 0: # this is an attempt for very old pre 2011 files.
+                amplitudes = stimulus_columns.columns_by_name("%6.3f")
+                print(f"Found {len(amplitudes)} amplitude columns with the name %6.3f!")
             parameters = stimulus_columns.columns_by_name("parameter")
             for i in range(0 if not skip_first else 1, len(index_col)):
                 start_time = index_col[i] * sampleinterval
@@ -365,15 +371,20 @@ class Converter(object):
             counter = {}
             stim_metadata = parse_stimulus_description(os.path.join(self._folder, "stimulus-descriptions.dat"))
             for rr in self._stimuli_dat.repro_runs:
+                if rr is None or rr.name is None:
+                    print(rr)
+                    continue
                 if rr.name in counter:
                     counter[rr.name] += 1
                 else:
                     counter[rr.name] = 1
+                if not rr.valid:
+                    continue
                 if "BaselineActivity" in rr.name:
                     continue  # there are no stimulus presented during baseline
                 repro_name = f"{rr.name}_{counter[rr.name]}"
                 stims[repro_name] = stimulus_descriptions(repro_name, rr, sampleinterval)
-
+                
             return stims, stim_metadata
 
         def store_stimuli(stims, stim_metadata):
@@ -446,7 +457,7 @@ class Converter(object):
                 for rt in self._raw_data_arrays:
                     mtag.references.append(self._raw_data_arrays[rt])
 
-                if signal in stim_metadata.sections:
+                if stim_metadata is not None and signal in stim_metadata.sections:
                     metadata = stim_metadata[signal]
                     mtag.metadata = self._nixfile.create_section(mtag.name, "relacs.stimulus")
                     odml2nix(metadata, mtag.metadata)
@@ -462,9 +473,16 @@ class Converter(object):
 
     def convert_repro_runs(self):
         def repro_times(reprorun, sampleinterval):
+            if reprorun.name is None:
+                return None, None
+            if not reprorun.valid:
+                return None, None
             index_col = reprorun.table.find_column(1)
+            if len(index_col) == 0:
+                return None, None
+
             stimulus_grp = reprorun.table["stimulus"]
-            signals = stimulus_grp.columns_by_name("signal") 
+            signals = stimulus_grp.columns_by_name("signal")
             is_init = np.any(np.array([s[0] for s in signals], dtype=object) == "init")
             delay_cols = stimulus_grp.columns_by_name("delay")
             delay = 0.0 if (len(delay_cols) == 0 or is_init) else delay_cols[0][0]
@@ -501,8 +519,16 @@ class Converter(object):
                     counter[rr.name] += 1
                 else:
                     counter[rr.name] = 1
-                repro_names.append(f"{rr.name}_{counter[rr.name]}")
+                
+                if not rr.valid:
+                    continue
                 start, end = repro_times(rr, sampleinterval)
+                if start is None:
+                    logging.error(f"RePro run: {rr.name} has no start/stop entries! It is ignored!")
+                    continue
+                    
+                repro_names.append(f"{rr.name}_{counter[rr.name]}")
+
                 repro_starts.append(start)
                 repro_durations.append(end - start)
                 repro_ends.append(end)

@@ -60,7 +60,10 @@ def parse_stimulus_description(filename):
     if not os.path.exists(filename):
         return
     root = odml.Section("root")
-    format = looks_like_oldstyle(filename)
+    try:
+        format = looks_like_oldstyle(filename)
+    except:
+        return None
     section = None
     with open(filename, "r") as f:
         for l in f:
