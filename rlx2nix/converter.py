@@ -23,14 +23,6 @@ from .stimdescription import parse_stimulus_description
 
 from IPython import embed
 
-#units = ["mV", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g"]
-#unit_pattern = {}
-#for unit in units:
-#    unit_pattern[unit] = re.compile(f"^(^[+-]?\\d+\\.?\\d*)\\s?{unit}$", re.IGNORECASE|re.UNICODE)
-#only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
-#integer_number = re.compile("^[+-]?\\d+$")
-#number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+(/\\w+)?$")
-
 
 class Converter(object):
 
@@ -338,7 +330,7 @@ class Converter(object):
             amplitudes = stimulus_columns.columns_by_name("amplitude")
             if len(amplitudes) == 0: # this is an attempt for very old pre 2011 files.
                 amplitudes = stimulus_columns.columns_by_name("%6.3f")
-                print(f"Found {len(amplitudes)} amplitude columns with the name %6.3f!")
+                
             parameters = stimulus_columns.columns_by_name("parameter")
             for i in range(0 if not skip_first else 1, len(index_col)):
                 start_time = index_col[i] * sampleinterval
