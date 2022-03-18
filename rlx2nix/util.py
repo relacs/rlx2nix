@@ -12,7 +12,7 @@ class ValueType(enum.Enum):
 
 only_number = re.compile("^([+-]?\\d+\\.?\\d*)$")
 integer_number = re.compile("^[+-]?\\d+$")
-number_and_unit = re.compile("^(^[+-]?\\d+\\.?\\d*)\\s?\\w+%?(/\\w+)?$")
+number_and_unit = re.compile("^(^[+-]?\\d*\\.?\\d*)\\s?\\w+%?(/\\w+)?$")
 
 units = ["mV", "mV/cm", "sec","ms", "min", "uS/cm", "C", "°C", "Hz", "kHz", "cm", "mm", "um", "mg/l", "ul" "MOhm", "g", "%"]
 unit_pattern = {}
