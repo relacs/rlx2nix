@@ -115,11 +115,16 @@ class Converter(object):
 
     def read_info_file(self):
         def looks_like_oldstyle(filename):
+            recording_found = False
             with open(filename, 'r') as f:
                 for l in f:
                     if "# Recording" in l:
+                        recording_found = True
                         oldtyle = not l.strip().endswith(":")
                         break
+            if not recording_found:
+                logging.error(f"Conversion failed due to broken info file! {filename}")
+                raise ValueError("Recording section not found in info file {filename}.")
             return oldtyle
 
         filename = os.path.join(self._folder, "info.dat")
@@ -511,10 +516,29 @@ class Converter(object):
                     counter[rr.name] += 1
                 else:
                     counter[rr.name] = 1
-                
                 if not rr.valid:
-                    continue
-                start, end = repro_times(rr, sampleinterval)
+                    start, end = None, None
+                    if "baselineactivity" in rr.name.lower():
+                        logging.warning(f"BaselineActivity run (Repro No {i}) is incomplete/invalid, trying to rescue!")
+                        if i == 0:
+                            start = 0.0
+                        else:
+                            _, start = repro_times(self._stimuli_dat.repro_runs[i-1], sampleinterval)
+                        if i < len(self._stimuli_dat.repro_runs):
+                            end, _ = repro_times(self._stimuli_dat.repro_runs[i+1], sampleinterval)
+                        if start is None or end is None:
+                            logging.error(f"BaselineActivity rescue failed, estimated start or end time is invalid!")
+                            continue
+                        start += 1.0
+                        end -= 1.0
+                        if start >= end:
+                            logging.error(f"BaselineActivity rescue failed, estimated interval is too short/invalid!")
+                            continue
+                        logging.info(f"BaselineActivity run (Repro No {i}) succeeded! Estimated interval: {start} --> {end} s.")
+                    else:
+                        continue
+                else:
+                    start, end = repro_times(rr, sampleinterval)
                 if start is None:
                     logging.error(f"RePro run: {rr.name} has no start/stop entries! It is ignored!")
                     continue
