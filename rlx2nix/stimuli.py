@@ -11,7 +11,7 @@ repro = re.compile(".+RePro.*:{1}.+", re.IGNORECASE)
 
 class Column(object):
 
-    def __init__(self, name:str, number:int, type_or_unit:str) -> None:
+    def __init__(self, name: str, number: int, type_or_unit: str) -> None:
         self._name = name
         self._number = number
         self._type_or_unit = type_or_unit
@@ -80,15 +80,15 @@ class ColumnSubgroup(object):
     @property
     def parent(self):
         return self._parent
-    
+
     @parent.setter
     def parent(self, parent):
         if not isinstance(parent, ColumnGroup):
             raise ValueError(f"A Column can only be child of a ColumnGroup not of {type(parent)}!")
         self._parent = parent
 
-    def add_column(self, col:Column):
-        assert(isinstance(col, Column))
+    def add_column(self, col: Column):
+        assert (isinstance(col, Column))
         self._columns.append(col)
         col.parent = self
 
@@ -127,7 +127,7 @@ class ColumnSubgroup(object):
 
 class ColumnGroup(object):
 
-    def __init__(self, name:str) -> None:
+    def __init__(self, name: str) -> None:
         self._name = name
         self._subgroups = []
         self._parent = None
@@ -144,8 +144,8 @@ class ColumnGroup(object):
     def subgroup_names(self):
         return [sg.name for sg in self.subgroups]
 
-    def add_subgroup(self, subgroup:ColumnSubgroup):
-        assert(isinstance(subgroup, ColumnSubgroup))
+    def add_subgroup(self, subgroup: ColumnSubgroup):
+        assert (isinstance(subgroup, ColumnSubgroup))
         self._subgroups.append(subgroup)
         subgroup.parent = self
 
@@ -163,7 +163,7 @@ class ColumnGroup(object):
     @property
     def parent(self):
         return self._parent
-    
+
     @parent.setter
     def parent(self, parent):
         if not isinstance(parent, Table):
@@ -175,14 +175,14 @@ class ColumnGroup(object):
             if number in sg.column_numbers:
                 return sg.column(number)
         return None
-    
+
     def columns_by_name(self, name):
         cols = []
         for sg in self.subgroups:
             if name in sg:
                 cols.append(sg[name])
         return cols
-    
+
     def __contains__(self, key):
         return key in self.subgroup_names
 
@@ -201,7 +201,7 @@ class ColumnGroup(object):
 
 class Table(object):
 
-    def __init__(self, name:str, lines, start_index) -> None:
+    def __init__(self, name: str, lines, start_index) -> None:
         self._name = name
         self._column_groups = []
         self._start_index = start_index
@@ -215,8 +215,8 @@ class Table(object):
     def name(self):
         return self._name
 
-    def add_column_group(self, col_group:ColumnGroup):
-        assert(isinstance(col_group, ColumnGroup))
+    def add_column_group(self, col_group: ColumnGroup):
+        assert (isinstance(col_group, ColumnGroup))
         self._column_groups.append(col_group)
         col_group.parent = self
 
@@ -238,7 +238,7 @@ class Table(object):
     def find_column(self, number):
         col = None
         for cg in self.column_groups:
-            col = cg.find_column(number) 
+            col = cg.find_column(number)
             if col is not None:
                 break
         return col
@@ -307,9 +307,9 @@ class Table(object):
                     colname_indices.append(colname_line.find(name, colname_indices[-1] + 1))
                 else:
                     colname_indices.append(colname_line.find(name))
-            coltype_line = lines[index+1]
+            coltype_line = lines[index + 1]
             coltypes = re.split(r'\s{2,}', coltype_line[1:].strip())
-            colnumber_line = lines[index+2]
+            colnumber_line = lines[index + 2]
             colnumbers = re.split(r'\s{2,}', colnumber_line[1:].strip())
             for i, (name, position) in enumerate(zip(colnames, colname_indices)):
                 if position >= start_pos and position < end_pos:
@@ -324,7 +324,7 @@ class Table(object):
             subgroup_indices = []
             for i, n in enumerate(subgroup_names):
                 n = n + " " if i < (len(subgroup_names) - 1) else n
-                name_index = line.find(n, (0 if len(subgroup_indices) == 0 else subgroup_indices[i-1]))
+                name_index = line.find(n, (0 if len(subgroup_indices) == 0 else subgroup_indices[i - 1]))
                 subgroup_indices.append(name_index)
 
             for i, (name, position) in enumerate(zip(subgroup_names, subgroup_indices)):
@@ -332,7 +332,7 @@ class Table(object):
                     logging.debug(f"column_group {col_group.name} ({start_pos} to {end_pos}) has subgroup {name} @ {position}")
                     sub = ColumnSubgroup(name)
                     col_group.add_subgroup(sub)
-                    end_position = -1 if i >= len(subgroup_indices)-1 else subgroup_indices[i+1]-1
+                    end_position = -1 if i >= len(subgroup_indices) - 1 else subgroup_indices[i + 1] - 1
                     parse_columns(lines, index + 1, position, end_position, sub)
 
         def parse_column_groups(lines, index, t):
@@ -341,19 +341,21 @@ class Table(object):
             col_group_indices = [line.find(sub) for sub in col_group_names]
 
             for i, (start_pos, name) in enumerate(zip(col_group_indices, col_group_names)):
-                end_pos = -1 if i >= len(col_group_indices)-1 else col_group_indices[i+1]-1
+                end_pos = -1 if i >= len(col_group_indices) - 1 else col_group_indices[i + 1] - 1
                 g = ColumnGroup(name)
                 logging.debug(f"New column group: {g.name}...")
-                parse_subgroups(lines, index+1, start_pos, end_pos, g)
+                parse_subgroups(lines, index + 1, start_pos, end_pos, g)
                 t.add_column_group(g)
 
         def parse_header(lines, start_index, end_index):
-            assert(lines[start_index].startswith("#Key"))
-            assert(end_index - start_index == 5)
-            parse_column_groups(lines, start_index+1, self)
+            assert (lines[start_index].startswith("#Key"))
+            assert (end_index - start_index == 5)
+            parse_column_groups(lines, start_index + 1, self)
 
         def read_tabledata(lines, start_index):
             def convert_data(d, dt):
+                if "-" in d or len(d.strip()) == 0:
+                    return str(d)
                 if dt == int:
                     d = int(d)
                 elif dt == float:
@@ -369,7 +371,7 @@ class Table(object):
                 else:
                     return str
 
-            columns = [self.find_column(i+1) for i in range(self.column_count)]
+            columns = [self.find_column(i + 1) for i in range(self.column_count)]
             dtypes = [float for c in columns]
             end_index = start_index
             for line in lines[start_index:]:
@@ -381,11 +383,7 @@ class Table(object):
                         if end_index == start_index:
                             dt = guess_column_dtype(data[i].strip())
                             dtypes[i] = dt
-                        try:
-                            d = convert_data(data[i].strip(), dt)
-                        except Exception as e:
-                            d = str(d)
-                            logging.debug(e, exc_info=True)
+                        d = convert_data(data[i].strip(), dt)
                         c.append_data(d)
                 else:
                     break
@@ -396,7 +394,7 @@ class Table(object):
         if (end - start) != 5:
             return end, False
         parse_header(lines, start, end)
-        end_index = read_tabledata(lines, end+1)
+        end_index = read_tabledata(lines, end + 1)
         if (end + 1) == end_index:
             return end_index, False
 
@@ -412,7 +410,6 @@ class Metadata(object):
         if rearrange:
             self._rearrange_metadata()
 
-
     def _rearrange_metadata(self):
         def is_oldstyle():
             return "RePro-Info" not in self._root.sections
@@ -420,8 +417,7 @@ class Metadata(object):
         repro_metadata = odml.Section("RePro-metadata", type="relacs.reprometadata")
         if is_oldstyle():
             logging.info("Rearranging oldstyle metadata...")
-            root_props = {"repro":"RePro", "author":"Author", "version":"Version", "date":"Date", "run":"Run", "experiment":"Experiment"}
-
+            root_props = {"repro": "RePro", "author": "Author", "version": "Version", "date": "Date", "run": "Run", "experiment": "Experiment"}
             settings = self._root["project"]
             repro_info = repro_metadata.create_section("RePro-Info", type="relacs.repro")
             new_settings = repro_info.create_section("settings", type="relacs.repro.settings")
@@ -464,7 +460,7 @@ class Metadata(object):
                 name = l.strip().lstrip("# ").split(":")[0]
                 type = "n.s."
                 if "(" in name and name.endswith(")"):
-                    parts = name.split("(") 
+                    parts = name.split("(")
                     name = parts[0].strip()
                     type = parts[-1][:-1].strip()
                     type = type.replace("/", ".")
@@ -539,21 +535,22 @@ class ReproRun(object):
 
     def __str__(self):
         return self.__repr__()
-    
+
     def __repr__(self):
         s = f"ReproRun: {self.name} (lines {self.start_index} through {self.end_index} valid {self.valid})"
         return s
 
 
 class StimuliDat(object):
-    
+
     def __init__(self, filename, loglevel="ERROR") -> None:
+        logging.info("Reading stimuli.dat!")
         self._filename = filename
         self._repro_runs = []
         self._general_metadata = []
-        logging.basicConfig(level=logging._nameToLevel[loglevel], force=True)
+        # logging.basicConfig(level=logging._nameToLevel[loglevel], force=True)
         if not os.path.exists(self._filename):
-            logging.error(f"Stimuli.dat file {self._filename} does not exist!")
+            logging.error("%s file does not exist!", self._filename)
             return
 
         self.scan_file()
@@ -589,13 +586,13 @@ class StimuliDat(object):
         return start_index, index
 
     def scan_file(self):
-        f = open(self._filename)
-        lines = f.readlines()
-        f.close()
+        logging.info("Scanning Stimuli.dat!")
+        with open(self._filename, "r") as f:
+            lines = f.readlines()
 
         start, end = self.find_general_metadata(lines)
         self._general_metadata = Metadata("General settings", lines, start, end)
-        while end is not None and end < len(lines) -1:
+        while end is not None and end < len(lines) - 1:
             repro_run = ReproRun(lines, end)
             end = repro_run.end_index
             self._repro_runs.append(repro_run)
@@ -603,6 +600,7 @@ class StimuliDat(object):
     def __repr__(self):
         s = f"Stimuli.dat file content of dataset {os.path.split(self._filename)[-2]}."
         return s
+
 
 if __name__ == "__main__":
     #    stimdat = StimuliDat("../2012-03-23-ae-invivo-1/stimuli.dat")
