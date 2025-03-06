@@ -1,6 +1,6 @@
-from multiprocessing.sharedctypes import Value
 import os
 import odml
+import logging
 
 from .config import ConfigFormat
 from .util import parse_value
@@ -23,7 +23,8 @@ def looks_like_oldstyle(filename):
                 return ConfigFormat.new
             elif looks_like_section(l, ConfigFormat.old):
                 return ConfigFormat.old
-    raise ValueError("Cannot guess the format!")
+    logging.warning("Cannot guess the format of %s!", filename)
+    return None
 
 
 def parse_section(line, format):
@@ -60,9 +61,8 @@ def parse_stimulus_description(filename):
     if not os.path.exists(filename):
         return
     root = odml.Section("root")
-    try:
-        format = looks_like_oldstyle(filename)
-    except:
+    format = looks_like_oldstyle(filename)
+    if format is None:
         return None
     section = None
     with open(filename, "r") as f:
@@ -80,4 +80,3 @@ def parse_stimulus_description(filename):
                     p.unit = u
 
     return root
-
