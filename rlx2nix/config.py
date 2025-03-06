@@ -23,10 +23,10 @@ class ConfigFormat(enum.Enum):
 
 
 class ConfigFile(object):
-    def __init__(self, filename=None):
-        if filename is not None:
-            self._root = odml.Section(name=os.path.split(filename)[-1])
-            self.load(filename)
+    def __init__(self, configfile=None):
+        if configfile is not None:
+            self._root = odml.Section(name=configfile.name)
+            self.load(configfile)
         else:
             self._root = odml.Section(name="Root")
     
@@ -240,9 +240,9 @@ class ConfigFile(object):
     def looks_like_section(self, line, style=ConfigFormat.old):
         return not self.empty_or_comment(line) and not self.looks_like_property(line, style)
 
-    def guess_indentation(self, filename, style=ConfigFormat.old):
+    def guess_indentation(self, configfile, style=ConfigFormat.old):
         indentations = set()
-        with open(filename, 'r') as f:
+        with open(configfile, 'r') as f:
             for line in f:
                 if self.looks_like_section(line, style):
                     indentations.add(len(line) - len(line.lstrip(" ")))
@@ -258,8 +258,8 @@ class ConfigFile(object):
 
         return indent
 
-    def guess_file_format(self, filename):
-        with open(filename, 'r') as f:
+    def guess_file_format(self, configfile):
+        with open(configfile, 'r') as f:
             for line in f:
                 if self.empty_or_comment(line):
                     continue
@@ -292,16 +292,16 @@ class ConfigFile(object):
         values, unit = self.parse_value(val, style)
         return key, values, unit
 
-    def read_config_file(self, filename, indent=2, format=ConfigFormat.old):
+    def read_config_file(self, configfile, indent=2, config_format=ConfigFormat.old):
         current_section = self._root
         current_level = 0
-        with open(filename, 'r') as f:
+        with open(configfile, 'r') as f:
             for line in f:
                 # do not process empty lines and comments:
                 if self.empty_or_comment(line):
                     continue
 
-                if self.looks_like_section(line, format):  # this line starts a section
+                if self.looks_like_section(line, config_format):  # this line starts a section
                     if "-" * 8 in line:
                         line = line.replace("-","").strip()
                     new_level = (len(line) - len(line.lstrip(" "))) // indent + 1
@@ -314,26 +314,27 @@ class ConfigFile(object):
                         while level_diff > 0:
                             current_section = current_section.parent
                             level_diff -= 1
-                    logging.debug(f"new section {line} in {current_section.name}")
+                    logging.debug("creating new section %s in %s", line, current_section.name)
                     current_section = current_section.create_section(name=line)
                     current_level = new_level
                     continue
 
-                if self.looks_like_property(line, format):
-                    key, values, unit = self.parse_property(line, format)
-                    logging.debug(f"\tadd {key} to section {current_section.name}!")
+                if self.looks_like_property(line, config_format):
+                    key, values, unit = self.parse_property(line, config_format)
+                    logging.debug("... adding %s to section %s!", key, current_section.name)
                     p = current_section.create_property(name=key, values=values)
                     if unit is not None and len(unit) > 0:
                         p.unit = unit
 
-    def load(self, filename):
-        if not os.path.exists(filename):
-            raise ValueError(f"File {filename} does not exist!")
-        if "relacsplugins.cfg" in filename:
+    def load(self, configfile):
+        if not configfile.exists():
+            raise ValueError(f"File {configfile} does not exist!")
+        if "relacsplugins.cfg" in configfile.name:
             raise ValueError("Cannot read pluginsconfig files!")
-        format = self.guess_file_format(filename)
-        indentation = self.guess_indentation(filename, format)
-        self.read_config_file(filename, indentation, format)
+
+        format = self.guess_file_format(configfile)
+        indentation = self.guess_indentation(configfile, format)
+        self.read_config_file(configfile, indentation, format)
 
     def find_section(self, key, section=None):
         if section is None:
@@ -342,7 +343,7 @@ class ConfigFile(object):
         return found
 
 if __name__ == "__main__":
-    
+    from IPython import embed
     print("Checking configfile module ...")
     print('')
 
