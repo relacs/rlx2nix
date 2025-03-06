@@ -6,11 +6,11 @@
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted under the terms of the BSD License. See
 # LICENSE file in the root of the Project.
-import re
 import os
 import glob
 import odml
 import logging
+import pathlib
 import subprocess
 import numpy as np
 import nixio as nix
@@ -26,12 +26,12 @@ from IPython import embed
 
 class Converter(object):
 
-    def __init__(self, folder_name, output_name, force=False) -> None:
-        if not os.path.exists(folder_name):
-            logging.error(f"{folder_name} does not exist!")
+    def __init__(self, folder:pathlib.Path, output:pathlib.Path, force=False) -> None:
+        if not folder.exists():
+            logging.error("%s does not exist!", str(folder))
             raise ValueError("File not found error!")
-        self._folder = folder_name
-        self._output = output_name
+        self._folder = folder
+        self._output = output
         self._event_traces = None
         self._raw_traces = None
         self._raw_data_arrays = {}
@@ -45,27 +45,27 @@ class Converter(object):
         self.preflight()
 
     def preflight(self):
-        logging.debug(f"Pre-checking folder {self._folder}!")
+        logging.debug("Pre-checking folder %s!", str(self._folder))
         self.check_output()
         self.check_folder()
         logging.debug("Pre-checking done.")
 
     def check_output(self):
-        logging.debug(f"Checking output name: {self._output}!")
-        if os.path.exists(self._output):
-            logging.warn(f"Output file name {self._output} already exists!")
+        logging.debug("Checking output name: %s!", str(self._output))
+        if self._output.exists():
+            logging.warning("Output file name %s already exists!", str(self._output))
             if self._force:
-                logging.warn(f"... force flag is set {self._force}, going to overwrite!")
+                logging.warning("... force flag is set %s, going to overwrite!", str(self._force))
             else:
-                logging.error(f"Force flag is not set ({self._force}), abort!")
-                raise ValueError("Output file {self._output} already exists! If you want to overwrite it use the --force flag.")
-        logging.debug(f"... ok!")
+                logging.error("Force flag is not set (%s), abort!", str(self._force))
+                raise ValueError(f"Output file {self._output} already exists! If you want to overwrite it use the --force flag.")
+        logging.debug("... ok!")
 
         return True
 
     def unzip(self, tracename):
         if os.path.exists(tracename):
-            logging.debug(f"\tunzip: {tracename}")
+            logging.debug("... unzipping: %s", str(tracename))
             subprocess.check_call(["gunzip", tracename])
 
     def find_traces(self):
@@ -82,34 +82,34 @@ class Converter(object):
         return raw_traces, event_traces
 
     def find_raw_traces(self):
-        logging.debug(f"Checking for raw traces!")
-        traces = sorted(glob.glob(os.path.join(self._folder, "trace-*.raw*")))
-        for rt in traces:
-            if rt.endswith(".gz") and rt.split(".gz")[0] not in traces:
-                self.unzip(os.path.split(rt)[-1])
+        logging.debug("Checking for raw traces!")
+        raw_traces = sorted(self._folder.glob("trace-*.raw*"))
+        for rt in raw_traces:
+            if ".gz" in rt.suffix and rt.with_suffix(".raw") not in raw_traces:
+                self.unzip(rt)
 
-        traces = sorted(glob.glob(os.path.join(self._folder, "trace-*.raw")))
-        logging.debug(f"Found {len(traces)} raw traces. {[os.path.split(t)[-1] for t in traces]}")
-
-        return traces
+        raw_traces = sorted(self._folder.glob("trace*.raw"))
+        logging.debug("Found %i raw traces. %s", len(raw_traces), str([t.name for t in raw_traces]))
+        return raw_traces
 
     def find_event_traces(self):
         logging.debug("Discovering event traces!")
-        traces = sorted(glob.glob(os.path.join(self._folder, "*-events.dat")))
-        logging.debug(f"Found {len(traces)} event traces. {[os.path.split(t)[-1] for t in traces]}")
+        traces = sorted(self._folder.glob("*-events.dat"))
+        logging.debug("Found %i event traces. %s", len(traces), str(t.name for t in traces))
         return traces
 
     def find_config_file(self):
-        if not os.path.exists(os.path.join(self._folder, "relacs.cfg")):
-            logging.error("Found no info file!")
+        config = self._folder / pathlib.Path("relacs.cfg")
+        if not config.exists():
+            logging.error("Config file not found! %s", str(config))
             raise ValueError(f"No relacs.cfg file found in {self._folder}!")
-        configuration = ConfigFile(os.path.join(self._folder, "relacs.cfg"))
+        configuration = ConfigFile(config)
         return configuration
 
     def find_info(self):
-        filename = os.path.join(self._folder, "info.dat")
-        if not os.path.exists(filename):
-            logging.error("Found no info file!")
+        infofile = self._folder / pathlib.Path("info.dat")
+        if not infofile.exists():
+            logging.error("Info file not found! %s", str(infofile))
             raise ValueError(f"No info file found in {self._folder}!")
         return True
 
@@ -135,11 +135,13 @@ class Converter(object):
             with open(filename, 'r') as f:
                 lines = f.readlines()
         except UnicodeDecodeError:
+            print("UnicodeDecodeError, Replacing experimenter...")
             logging.debug("Replacing experimenter...")
             command = r"sudo sed -i '/Experimenter/c\#       Experimenter: Anna Stoeckl' %s" % filename
             subprocess.check_call(command, shell=True)
             with open(filename, 'r') as f:
                 lines = f.readlines()
+
         for l in lines:
             if not l.startswith("#"):
                 continue
@@ -196,16 +198,17 @@ class Converter(object):
         return channel_config
 
     def find_stimulus_info(self):
-        logging.debug("Scanning stimuli.dat file!")
-        if not os.path.exists(os.path.join(self._folder, "stimuli.dat")):
-            logging.error("Found no stimuli.dat file! Abort!")
+        logging.debug("Scanning for stimuli.dat file!")
+        stimfile = self._folder / pathlib.Path("stimuli.dat")
+        if not stimfile.exists():
+            logging.error("Stimuli.dat file not found! Abort!")
             raise ValueError("No stimuli.dat file found!")
 
     def find_stimulus_descriptions(self):
-        logging.debug("Scanning stimulus-descriptions.dat!")
-        filename = os.path.join(self._folder, "stimulus-descriptions.dat")
-        if not os.path.exists(filename):
-            logging.warning("Stimulus descriptions file {filename} does not exist!")
+        logging.debug("Scanning for stimulus-descriptions.dat!")
+        filename = self._folder / pathlib.Path("stimulus-descriptions.dat")
+        if not filename.exists():
+            logging.warning("Stimulus descriptions file %s does not exist!", filename.name)
             return False
         return True
 
@@ -268,7 +271,7 @@ class Converter(object):
 
         for rt in self._raw_traces:
             logging.info(f"... trace {rt._trace_no}: {rt.name}")
-            data = np.fromfile(os.path.join(self._folder, rt.filename), dtype=np.float32)
+            data = np.fromfile(self._folder / pathlib.Path(rt.filename), dtype=np.float32)
             da = self._block.create_data_array(rt.name, f"relacs.data.sampled.{rt.name}", dtype=nix.DataType.Float, data=data)
             da.unit = channel_config[rt._trace_no]["unit"]
             si = float(channel_config[rt._trace_no]["sampling interval"][:-2]) / 1000.
@@ -299,8 +302,7 @@ class Converter(object):
             self._event_data_arrays[et] = da
 
     def convert_stimuli(self):
-        def stimulus_descriptions(repro_name, reprorun, sampleinterval):
-            
+        def stimulus_descriptions(repro_name, reprorun, sampleinterval): 
             def skip_first_index(signals):
                 skip = True
                 for s in signals:
@@ -462,6 +464,7 @@ class Converter(object):
 
             return None
 
+        logging.info("Converting stimuli...")
         sampleinterval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] /1000
         stims, metadata = stimuli(sampleinterval)
         store_stimuli(stims, metadata)
@@ -500,7 +503,7 @@ class Converter(object):
                         duration = float(dur) / 1000
                         break
                 end_time = index_col[-1] * sampleinterval + duration
-            logging.debug(f"Repro {reprorun.name} from {start_time} to {end_time}s")
+            logging.debug("Repro %s from %.3f to %.3fs", reprorun.name, start_time, end_time)
             return start_time, end_time
 
         def repro_runs():
@@ -509,7 +512,7 @@ class Converter(object):
             repro_ends = []
             repro_durations = []
             repro_metadata = []
-            sampleinterval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] /1000
+            sample_interval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] / 1000
             counter = {}
             for i, rr in enumerate(self._stimuli_dat.repro_runs):
                 if rr.name in counter:
@@ -519,30 +522,32 @@ class Converter(object):
                 if not rr.valid:
                     start, end = None, None
                     if "baselineactivity" in rr.name.lower():
-                        logging.warning(f"BaselineActivity run (Repro No {i}) is incomplete/invalid, trying to rescue!")
+                        logging.info("BaselineActivity run (Repro No %i) is incomplete/invalid, trying to rescue..", i)
                         if i == 0:
                             start = 0.0
                         else:
-                            _, start = repro_times(self._stimuli_dat.repro_runs[i-1], sampleinterval)
-                        if i < len(self._stimuli_dat.repro_runs):
-                            end, _ = repro_times(self._stimuli_dat.repro_runs[i+1], sampleinterval)
+                            _, start = repro_times(self._stimuli_dat.repro_runs[i-1], sample_interval)
+
+                        if i < len(self._stimuli_dat.repro_runs)-1:
+                            end, _ = repro_times(self._stimuli_dat.repro_runs[i+1], sample_interval)
                         if start is None or end is None:
-                            logging.error(f"BaselineActivity rescue failed, estimated start or end time is invalid!")
+                            logging.warning("Rescue of BaselineActivity (Repro No %i) failed, estimated start or end time are invalid!", i)
                             continue
                         start += 1.0
                         end -= 1.0
                         if start >= end:
-                            logging.error(f"BaselineActivity rescue failed, estimated interval is too short/invalid!")
+                            logging.warning("Rescue of BaselineActivity  (Repro No %i) failed, estimated interval is too short/invalid!", i)
                             continue
-                        logging.info(f"BaselineActivity run (Repro No {i}) succeeded! Estimated interval: {start} --> {end} s.")
+                        logging.info("BaselineActivity run (Repro No %i) succeeded! Estimated interval: %.3f --> %.3f s.",
+                                     i, start, end)
                     else:
                         continue
                 else:
-                    start, end = repro_times(rr, sampleinterval)
+                    start, end = repro_times(rr, sample_interval)
                 if start is None:
-                    logging.error(f"RePro run: {rr.name} has no start/stop entries! It is ignored!")
+                    logging.error("RePro run: %s has no start/stop entries! It is ignored!", rr.name)
                     continue
-                    
+
                 repro_names.append(f"{rr.name}_{counter[rr.name]}")
 
                 repro_starts.append(start)
@@ -551,10 +556,11 @@ class Converter(object):
                 repro_metadata.append(rr.metadata)
 
             for i, (start, end , duration) in enumerate(zip(repro_starts, repro_ends, repro_durations)):
-                logging.debug(f"Duration {duration} for repro {repro_names[i]} and {i} < {len(repro_starts) - 1}")
-                if duration < sampleinterval and i < len(repro_starts) -1:
+                logging.debug("Duration %.3f for repro %s and %i < %i",
+                              duration, repro_names[i], i, len(repro_starts)-1) 
+                if duration < sample_interval and i < len(repro_starts) -1:
                     repro_durations[i] = repro_starts[i+1] - start
-                    logging.debug(f"\t new duration: {repro_durations[i]}")
+                    logging.debug("... new duration: %.3f", repro_durations[i])
                     repro_ends[i] = repro_starts[i+1]
 
             return repro_names, repro_metadata, repro_starts, repro_durations
@@ -562,7 +568,7 @@ class Converter(object):
         def store_repro_runs(repro_names, repro_metadata, start_times, durations):
             excluded_refs = ["restart", "recording", "stimulus"]
             for name, metadata, start, duration in zip(repro_names, repro_metadata, start_times, durations):
-                logging.debug(f"... storing {name} which ran from {start} to {start + duration}.")
+                logging.debug("... storing %s which ran from %.3f to %.3fs.", name, start, start+ duration)
                 tag = self._block.create_tag(name, "relacs.repro_run", position=[start])
                 tag.extent = [duration]
                 for et in self._event_data_arrays:
@@ -574,19 +580,19 @@ class Converter(object):
                 odml2nix(metadata, tag.metadata)
                 self._repro_tags[name] = tag
 
-        names, metadata, starts, durations = repro_runs()
         logging.info("Converting RePro runs...")
+        names, metadata, starts, durations = repro_runs()
         store_repro_runs(names, metadata, starts, durations)
 
     def convert(self):
-        logging.info(f"Converting dataset {self._folder} to nix file {self._output}!")
+        logging.info("Converting dataset %s to nix file %s!", self._folder, self._output)
 
         channel_config = self.read_channel_config()
         self.open_nix_file()
         self.convert_raw_traces(channel_config)
         self.convert_event_traces()
-
         self._stimuli_dat = StimuliDat(os.path.join(self._folder, "stimuli.dat"))
         self.convert_repro_runs()
         self.convert_stimuli()
         self._nixfile.close()
+        logging.info("Conversion of dataset %s to nix file %s finished!", self._folder, self._output)
