@@ -24,3 +24,5 @@ converts file-based relacs data files to nix files, does not convert repro-writt
 * add features ---> Done
 * rename event and data trace types --> Done
 * unclear how to handle "init" lines in FileStimulus repro runs. There, the real duration and the duration information in the stimuli.dat may be contradictory...
+
+Die 2 haben einen IndexError ausgespuckt: 2012-01-26-ai, 2012-01-27-aq --> confirmed

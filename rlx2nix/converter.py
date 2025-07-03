@@ -26,7 +26,7 @@ from IPython import embed
 
 class Converter(object):
 
-    def __init__(self, folder:pathlib.Path, output:pathlib.Path, force=False) -> None:
+    def __init__(self, folder: pathlib.Path, output: pathlib.Path, force=False) -> None:
         if not folder.exists():
             logging.error("%s does not exist!", str(folder))
             raise ValueError("File not found error!")
@@ -42,13 +42,18 @@ class Converter(object):
         self._block = None
         self._repro_tags = {}
         self._stimulus_mtags = {}
-        self.preflight()
+        self._can_probably_convert = self.preflight()
 
     def preflight(self):
         logging.debug("Pre-checking folder %s!", str(self._folder))
         self.check_output()
-        self.check_folder()
+
+        if not self.check_folder():
+            logging.error("Pre-checking failed, no info file or no stimuli.dat file!")
+            logging.debug("Pre-checking failed.")
+            return False
         logging.debug("Pre-checking done.")
+        return True
 
     def check_output(self):
         logging.debug("Checking output name: %s!", str(self._output))
@@ -85,11 +90,17 @@ class Converter(object):
         logging.debug("Checking for raw traces!")
         raw_traces = sorted(self._folder.glob("trace-*.raw*"))
         for rt in raw_traces:
-            if ".gz" in rt.suffix and rt.with_suffix(".raw") not in raw_traces:
-                self.unzip(rt)
+            if ".gz" in rt.suffix:
+                if ".raw" in str(rt):
+                    rawfile = pathlib.Path(str(rt).split(".")[0] + ".raw")
+                else:
+                    rawfile = rt.with_suffix(".raw")
+                if rawfile not in raw_traces:
+                    self.unzip(rt)
 
         raw_traces = sorted(self._folder.glob("trace*.raw"))
-        logging.debug("Found %i raw traces. %s", len(raw_traces), str([t.name for t in raw_traces]))
+        logging.debug("Found %i raw traces. %s", len(raw_traces),
+                      str([t.name for t in raw_traces]))
         return raw_traces
 
     def find_event_traces(self):
@@ -110,7 +121,7 @@ class Converter(object):
         infofile = self._folder / pathlib.Path("info.dat")
         if not infofile.exists():
             logging.error("Info file not found! %s", str(infofile))
-            raise ValueError(f"No info file found in {self._folder}!")
+            return False
         return True
 
     def read_info_file(self):
@@ -166,13 +177,13 @@ class Converter(object):
 
     def read_channel_config(self):
         logging.info("Reading channel configuration ...")
-        ids = [f"identifier{i}" for i in range(1, len(self._raw_traces)+1)]
-        units = [f"unit{i}" for i in range(1, len(self._raw_traces)+1)]
-        sampling_intervals = [f"sample interval{i}" for i in range(1, len(self._raw_traces)+1)]
-        sampling_rates = [f"sampling rate{i}" for i in range(1, len(self._raw_traces)+1)]
+        ids = [f"identifier{i}" for i in range(1, len(self._raw_traces) + 1)]
+        units = [f"unit{i}" for i in range(1, len(self._raw_traces) + 1)]
+        sampling_intervals = [f"sample interval{i}" for i in range(1, len(self._raw_traces) + 1)]
+        sampling_rates = [f"sampling rate{i}" for i in range(1, len(self._raw_traces) + 1)]
 
         channel_config = {}
-        for i in range(1, len(self._raw_traces)+1):
+        for i in range(1, len(self._raw_traces) + 1):
             channel_config[i] = {}
         with open(os.path.join(self._folder, "stimuli.dat")) as f:
             for line in f:
@@ -202,7 +213,8 @@ class Converter(object):
         stimfile = self._folder / pathlib.Path("stimuli.dat")
         if not stimfile.exists():
             logging.error("Stimuli.dat file not found! Abort!")
-            raise ValueError("No stimuli.dat file found!")
+            return False
+        return True
 
     def find_stimulus_descriptions(self):
         logging.debug("Scanning for stimulus-descriptions.dat!")
@@ -215,12 +227,15 @@ class Converter(object):
     def check_folder(self):
         logging.debug("Checking folder structure: ...")
         self._raw_traces, self._event_traces = self.find_traces()
-        self.find_info()
-        logging.debug("Found info file!")
-        self.find_stimulus_info()
-        logging.debug("Found stimulus information!")
-        stim_descriptions_found = self.find_stimulus_descriptions()
-        if stim_descriptions_found:
+        if self.find_info():
+            logging.debug("Found info file!")
+        else:
+            return False
+        if self.find_stimulus_info():
+            logging.debug("Found stimulus information!")
+        else:
+            return False
+        if self.find_stimulus_descriptions():
             logging.debug("Found stimulus descriptions!")
         else:
             logging.debug("Did not find stimulus descriptions!")
@@ -235,7 +250,7 @@ class Converter(object):
                 results = list(map(str.strip, value_str.split("|")))
             elif value_str[0] == "[" and "]" in value_str:
                 results = list(map(str.strip, value_str[1:value_str.index("]")].split(', ')))
-            else: 
+            else:
                 results = value_str
             return results
 
@@ -278,6 +293,15 @@ class Converter(object):
             da.append_sampled_dimension(si, unit="s")
             self._raw_data_arrays[rt] = da
 
+    def zip_raw_traces(self):
+        logging.info("(Re-) zipping, may take a little while...")
+        raw_traces = sorted(self._folder.glob("trace-*.raw"))
+        for rt in raw_traces:
+            if ".gz" in str(rt):
+                continue
+            logging.info("... %s", rt)
+            subprocess.check_call(["gzip", rt, "--force"])
+
     def convert_event_traces(self):
 
         def read_event_data(filename):
@@ -302,7 +326,7 @@ class Converter(object):
             self._event_data_arrays[et] = da
 
     def convert_stimuli(self):
-        def stimulus_descriptions(repro_name, reprorun, sampleinterval): 
+        def stimulus_descriptions(repro_name, reprorun, sampleinterval):
             def skip_first_index(signals):
                 skip = True
                 for s in signals:
@@ -329,15 +353,15 @@ class Converter(object):
             stimuli = []
             stimulus_columns = reprorun.table["stimulus"]
             signals = stimulus_columns.columns_by_name("signal")
-            skip_first  = skip_first_index(signals)
+            skip_first = skip_first_index(signals)
             index_col = reprorun.table.find_column(1)
             abstimes = stimulus_columns.columns_by_name("time")[0]
             delays = stimulus_columns.columns_by_name("delay")[0]
             durations = stimulus_columns.columns_by_name("duration")
             amplitudes = stimulus_columns.columns_by_name("amplitude")
-            if len(amplitudes) == 0: # this is an attempt for very old pre 2011 files.
+            if len(amplitudes) == 0:  # this is an attempt for very old pre 2011 files.
                 amplitudes = stimulus_columns.columns_by_name("%6.3f")
-                
+
             parameters = stimulus_columns.columns_by_name("parameter")
             for i in range(0 if not skip_first else 1, len(index_col)):
                 start_time = index_col[i] * sampleinterval
@@ -383,7 +407,7 @@ class Converter(object):
                     continue  # there are no stimulus presented during baseline
                 repro_name = f"{rr.name}_{counter[rr.name]}"
                 stims[repro_name] = stimulus_descriptions(repro_name, rr, sampleinterval)
-                
+
             return stims, stim_metadata
 
         def store_stimuli(stims, stim_metadata):
@@ -410,9 +434,9 @@ class Converter(object):
                     shape = (len(feats[key]), 1)
                     data = np.reshape(feats[key], shape)
                     dtype = nix.DataType.String if data.dtype == object else nix.DataType.Float
-                    feature_da = self._block.create_data_array(feat_name, feat_type, 
-                                                                shape= shape, dtype=dtype,
-                                                                data=data)
+                    feature_da = self._block.create_data_array(feat_name, feat_type,
+                                                               shape=shape, dtype=dtype,
+                                                               data=data)
                     feature_da.append_set_dimension()
                     mtag.create_feature(feature_da, nix.LinkType.Indexed)
                 return None
@@ -444,10 +468,10 @@ class Converter(object):
                 positions.append_set_dimension()
 
                 extents = self._block.create_data_array(f"{signal}_durations", "relacs.stimulus.duration",
-                                                          data=np.atleast_2d(signal_durations[signal]).T)
+                                                        data=np.atleast_2d(signal_durations[signal]).T)
                 extents.append_set_dimension()
 
-                mtag = self._block.create_multi_tag(signal, "relacs.stimulus.segment", positions=positions, 
+                mtag = self._block.create_multi_tag(signal, "relacs.stimulus.segment", positions=positions,
                                                     extents=extents)
                 self._stimulus_mtags[signal] = mtag
                 for et in self._event_data_arrays:
@@ -465,7 +489,7 @@ class Converter(object):
             return None
 
         logging.info("Converting stimuli...")
-        sampleinterval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] /1000
+        sampleinterval = self._stimuli_dat.input_settings.props["sample interval1"].values[0] / 1000
         stims, metadata = stimuli(sampleinterval)
         store_stimuli(stims, metadata)
 
@@ -486,8 +510,16 @@ class Converter(object):
             is_init = np.any(np.array([s[0] for s in signals], dtype=object) == "init")
             delay_cols = stimulus_grp.columns_by_name("delay")
             delay = 0.0 if (len(delay_cols) == 0 or is_init) else delay_cols[0][0]
-            start_time = index_col[0] * sampleinterval - delay / 1000.
-
+            try:
+                start_index = index_col[0]
+                if isinstance(start_index, str):
+                    start_index = int(start_index)
+                if start_index == -1:
+                    start_index = 0
+                start_time = start_index * sampleinterval - delay / 1000.
+            except:
+                embed()
+                return None, None
             duration_cols = stimulus_grp.columns_by_name("duration")
             duration = 0.0
             if "BaselineActivity" in reprorun.name:
@@ -526,10 +558,10 @@ class Converter(object):
                         if i == 0:
                             start = 0.0
                         else:
-                            _, start = repro_times(self._stimuli_dat.repro_runs[i-1], sample_interval)
+                            _, start = repro_times(self._stimuli_dat.repro_runs[i - 1], sample_interval)
 
-                        if i < len(self._stimuli_dat.repro_runs)-1:
-                            end, _ = repro_times(self._stimuli_dat.repro_runs[i+1], sample_interval)
+                        if i < len(self._stimuli_dat.repro_runs) - 1:
+                            end, _ = repro_times(self._stimuli_dat.repro_runs[i + 1], sample_interval)
                         if start is None or end is None:
                             logging.warning("Rescue of BaselineActivity (Repro No %i) failed, estimated start or end time are invalid!", i)
                             continue
@@ -555,20 +587,20 @@ class Converter(object):
                 repro_ends.append(end)
                 repro_metadata.append(rr.metadata)
 
-            for i, (start, end , duration) in enumerate(zip(repro_starts, repro_ends, repro_durations)):
+            for i, (start, end, duration) in enumerate(zip(repro_starts, repro_ends, repro_durations)):
                 logging.debug("Duration %.3f for repro %s and %i < %i",
-                              duration, repro_names[i], i, len(repro_starts)-1) 
-                if duration < sample_interval and i < len(repro_starts) -1:
-                    repro_durations[i] = repro_starts[i+1] - start
+                              duration, repro_names[i], i, len(repro_starts) - 1)
+                if duration < sample_interval and i < len(repro_starts) - 1:
+                    repro_durations[i] = repro_starts[i + 1] - start
                     logging.debug("... new duration: %.3f", repro_durations[i])
-                    repro_ends[i] = repro_starts[i+1]
+                    repro_ends[i] = repro_starts[i + 1]
 
             return repro_names, repro_metadata, repro_starts, repro_durations
 
         def store_repro_runs(repro_names, repro_metadata, start_times, durations):
             excluded_refs = ["restart", "recording", "stimulus"]
             for name, metadata, start, duration in zip(repro_names, repro_metadata, start_times, durations):
-                logging.debug("... storing %s which ran from %.3f to %.3fs.", name, start, start+ duration)
+                logging.debug("... storing %s which ran from %.3f to %.3fs.", name, start, start + duration)
                 tag = self._block.create_tag(name, "relacs.repro_run", position=[start])
                 tag.extent = [duration]
                 for et in self._event_data_arrays:
@@ -585,14 +617,21 @@ class Converter(object):
         store_repro_runs(names, metadata, starts, durations)
 
     def convert(self):
-        logging.info("Converting dataset %s to nix file %s!", self._folder, self._output)
+        if not self._can_probably_convert:
+            logging.error("Preflight check failed! Can not convert %s",
+                          self._folder)
+            return False
 
+        logging.info("Converting dataset %s to nix file %s!", self._folder, self._output)
         channel_config = self.read_channel_config()
         self.open_nix_file()
         self.convert_raw_traces(channel_config)
+        self.zip_raw_traces()
         self.convert_event_traces()
         self._stimuli_dat = StimuliDat(os.path.join(self._folder, "stimuli.dat"))
         self.convert_repro_runs()
         self.convert_stimuli()
         self._nixfile.close()
+        self._nixfile = None
         logging.info("Conversion of dataset %s to nix file %s finished!", self._folder, self._output)
+        return True

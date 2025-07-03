@@ -417,7 +417,8 @@ class Metadata(object):
         repro_metadata = odml.Section("RePro-metadata", type="relacs.reprometadata")
         if is_oldstyle():
             logging.info("Rearranging oldstyle metadata...")
-            root_props = {"repro": "RePro", "author": "Author", "version": "Version", "date": "Date", "run": "Run", "experiment": "Experiment"}
+            root_props = {"repro": "RePro", "author": "Author", "version": "Version",
+                          "date": "Date", "run": "Run", "experiment": "Experiment"}
             settings = self._root["project"]
             repro_info = repro_metadata.create_section("RePro-Info", type="relacs.repro")
             new_settings = repro_info.create_section("settings", type="relacs.repro.settings")
